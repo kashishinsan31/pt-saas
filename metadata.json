@@ -1,0 +1,8 @@
+{
+  "name": "Waiter Walk - Personal Training Management System",
+  "description": "Comprehensive PTMS for Waiter Walk Fitness & Wellness managing clients, trainers, package credits, 30-day expiries, 12-hour cancellations, Stripe recurring billing, and business analytics in Dubai.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
