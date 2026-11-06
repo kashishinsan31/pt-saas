@@ -58,17 +58,58 @@ export const LoginPage: React.FC = () => {
       return;
     }
 
-    const matchedUser = users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPassword = password.trim();
+
+    // 1. Primary lookup in users
+    let matchedUser = users.find((u) => u.email.trim().toLowerCase() === cleanEmail);
+
+    // 2. Resilient fallback lookup in clients (auto-reconcile user session if missing in users)
+    if (!matchedUser) {
+      const matchedClient = clients.find((c) => c.email.trim().toLowerCase() === cleanEmail);
+      if (matchedClient) {
+        matchedUser = {
+          id: `USR-CL-${matchedClient.id.replace('WW-CL-', '')}`,
+          email: matchedClient.email.trim().toLowerCase(),
+          role: 'client',
+          name: matchedClient.fullName,
+          password: matchedClient.password || 'Dubai2026!',
+          associatedId: matchedClient.id,
+          createdAt: new Date().toISOString(),
+        };
+      }
+    }
+
+    // 3. Resilient fallback lookup in trainers
+    if (!matchedUser) {
+      const matchedTrainer = trainers.find((t) => t.email.trim().toLowerCase() === cleanEmail);
+      if (matchedTrainer) {
+        matchedUser = {
+          id: `USR-TR-${matchedTrainer.id.replace('WW-TR-', '')}`,
+          email: matchedTrainer.email.trim().toLowerCase(),
+          role: 'trainer',
+          name: matchedTrainer.fullName,
+          password: matchedTrainer.password || 'Dubai2026!',
+          associatedId: matchedTrainer.id,
+          createdAt: new Date().toISOString(),
+        };
+      }
+    }
+
     if (matchedUser) {
       const validPassword = matchedUser.password || 'Dubai2026!';
-      if (password && password !== validPassword) {
-        setErrorMessage('Incorrect password. Please verify the credentials set by your Admin.');
+      if (cleanPassword && cleanPassword !== validPassword) {
+        setErrorMessage(
+          'Incorrect password. If your account was registered by an Admin, initial password is set by Admin (default: Dubai2026!).'
+        );
         return;
       }
       setCurrentUser(matchedUser);
-      logAudit('LOGIN_SUCCESS', `User ${matchedUser.email} authenticated successfully.`);
+      logAudit('LOGIN_SUCCESS', `User ${matchedUser.email} (${matchedUser.role}) authenticated successfully.`);
     } else {
-      setErrorMessage('No user account found with this email. Please check your credentials or register a new client account.');
+      setErrorMessage(
+        'No user account found with this email. If you were recently registered by an Admin, check your email spelling or register a new client profile below.'
+      );
     }
   };
 
@@ -82,18 +123,23 @@ export const LoginPage: React.FC = () => {
       return;
     }
 
-    // Check if email already exists
-    const existingUser = users.find((u) => u.email.toLowerCase() === regForm.email.trim().toLowerCase());
-    if (existingUser) {
+    const cleanEmail = regForm.email.trim().toLowerCase();
+    const cleanPassword = regForm.password.trim() || 'Dubai2026!';
+
+    // Check if email already exists in users or clients
+    const existingUser = users.find((u) => u.email.trim().toLowerCase() === cleanEmail);
+    const existingClient = clients.find((c) => c.email.trim().toLowerCase() === cleanEmail);
+    if (existingUser || existingClient) {
       setRegErrorMessage('An account with this email address already exists. Please sign in instead.');
       return;
     }
 
     try {
-      // 1. Create Client Record
+      // 1. Create Client Record with assigned password
       const newClient = addClient({
         fullName: regForm.fullName.trim(),
-        email: regForm.email.trim().toLowerCase(),
+        email: cleanEmail,
+        password: cleanPassword,
         whatsappNumber: regForm.whatsappNumber.trim(),
         dateOfBirth: regForm.dateOfBirth || '1995-01-01',
         gender: regForm.gender,
@@ -109,20 +155,23 @@ export const LoginPage: React.FC = () => {
 
       // 2. Prepare User session object
       const newUserObj: User = {
-        id: `USR-CL-${clients.length + 1}`,
-        email: regForm.email.trim().toLowerCase(),
+        id: `USR-CL-${newClient.id.replace('WW-CL-', '')}`,
+        email: cleanEmail,
         role: 'client',
         name: regForm.fullName.trim(),
+        password: cleanPassword,
         associatedId: newClient.id,
         createdAt: new Date().toISOString(),
       };
 
-      setRegSuccessMessage(`Welcome ${newClient.fullName}! Your Client ID is ${newClient.id}. Logging you in...`);
+      setRegSuccessMessage(
+        `Registration successful! Welcome ${newClient.fullName} (${newClient.id}). Logging you in...`
+      );
 
       setTimeout(() => {
         setCurrentUser(newUserObj);
         logAudit('CLIENT_SELF_REGISTRATION', `Client ${newClient.fullName} (${newClient.id}) registered independently.`);
-      }, 1200);
+      }, 1000);
     } catch (err: any) {
       setRegErrorMessage('Failed to register account. Please try again.');
     }
@@ -262,6 +311,10 @@ export const LoginPage: React.FC = () => {
                         {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </div>
+                    <p className="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1">
+                      <span className="font-semibold text-slate-600">Client tip:</span>
+                      <span>Initial password for accounts registered by Admin is <code className="bg-slate-100 text-blue-700 px-1 py-0.5 rounded font-mono font-bold">Dubai2026!</code></span>
+                    </p>
                   </div>
 
                   <div className="flex items-center justify-between text-xs pt-1">

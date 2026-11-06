@@ -32,11 +32,19 @@ import {
   Sparkles,
   X,
   CheckCheck,
+  Upload,
 } from 'lucide-react';
 import { PWAInstallButton } from '../common/PWAInstallButton';
 
 export const SettingsModule: React.FC = () => {
-  const { settings, updateSettings, auditLogs, resetToCleanProductionData } = useApp();
+  const {
+    settings,
+    updateSettings,
+    auditLogs,
+    resetToCleanProductionData,
+    exportDatabaseJSON,
+    importDatabaseJSON,
+  } = useApp();
 
   const [formSettings, setFormSettings] = useState({
     ...settings,
@@ -58,6 +66,7 @@ export const SettingsModule: React.FC = () => {
   });
   const [showWipeModal, setShowWipeModal] = useState<boolean>(false);
   const [wipeSuccess, setWipeSuccess] = useState<boolean>(false);
+  const [importFeedback, setImportFeedback] = useState<{ success: boolean; message: string } | null>(null);
 
   const handleSaveSettings = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -1435,9 +1444,89 @@ export const SettingsModule: React.FC = () => {
                           <span>Test Renewal Link</span>
                         </a>
                       </div>
-                      <p className="text-[10px] text-amber-800 leading-relaxed font-mono">
-                        "Hi Sara, notice from Waiter Walk: Your personal training package expires in 3 days. Your auto-renewal will activate upon validity expiration. Thank you!"
-                      </p>
+                    </div>
+                  </div>
+
+                  {/* Cross-Device Sync & Database Transfer (Netlify) */}
+                  <div className="pt-2 border-t border-slate-100 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-800 text-[11px] uppercase flex items-center gap-1.5">
+                        <Cloud className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Netlify Multi-Device Data Sync & Backup</span>
+                      </span>
+                      <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <Check className="w-3 h-3" />
+                        <span>Multi-Tab Sync Active</span>
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      On Netlify, records sync instantly across open tabs in your browser. To transfer your complete client database, package records, and promo codes between your Admin computer and mobile phone, download a backup below and import it on the other device.
+                    </p>
+
+                    {importFeedback && (
+                      <div
+                        className={`p-2.5 rounded-xl text-xs font-semibold flex items-center justify-between ${
+                          importFeedback.success
+                            ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                            : 'bg-red-50 text-red-800 border border-red-200'
+                        }`}
+                      >
+                        <span>{importFeedback.message}</span>
+                        <button
+                          type="button"
+                          onClick={() => setImportFeedback(null)}
+                          className="text-slate-400 hover:text-slate-600 text-xs ml-2"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const jsonStr = exportDatabaseJSON();
+                          const blob = new Blob([jsonStr], { type: 'application/json' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `waiter_walk_ptms_db_backup_${new Date().toISOString().slice(0, 10)}.json`;
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                          URL.revokeObjectURL(url);
+                        }}
+                        className="py-2 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition-colors cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Download Full Database (.json)</span>
+                      </button>
+
+                      <label className="py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition-colors cursor-pointer">
+                        <Upload className="w-3.5 h-3.5 text-slate-600" />
+                        <span>Restore Database from File</span>
+                        <input
+                          type="file"
+                          accept=".json,application/json"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const reader = new FileReader();
+                            reader.onload = (event) => {
+                              const content = event.target?.result as string;
+                              if (content) {
+                                const result = importDatabaseJSON(content);
+                                setImportFeedback(result);
+                              }
+                            };
+                            reader.readAsText(file);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
                     </div>
                   </div>
                 </div>

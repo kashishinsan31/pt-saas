@@ -38,6 +38,7 @@ import {
   Activity,
   Stethoscope,
   Tag,
+  Copy,
 } from 'lucide-react';
 
 export const ClientsModule: React.FC = () => {
@@ -80,6 +81,16 @@ export const ClientsModule: React.FC = () => {
   const [showClientPassword, setShowClientPassword] = useState(false);
   const [passwordFeedback, setPasswordFeedback] = useState('');
 
+  // Newly Created Client Credentials Modal
+  const [createdCredentialsModal, setCreatedCredentialsModal] = useState<{
+    id: string;
+    name: string;
+    email: string;
+    password: string;
+    whatsapp: string;
+  } | null>(null);
+  const [copiedCredential, setCopiedCredential] = useState(false);
+  const [showAddPassword, setShowAddPassword] = useState(false);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -88,6 +99,7 @@ export const ClientsModule: React.FC = () => {
     dateOfBirth: '1990-01-01',
     gender: 'Male' as const,
     email: '',
+    password: 'Dubai2026!',
     whatsappNumber: '+97150',
     residentialAddress: '',
     communityName: 'Palm Jumeirah',
@@ -100,24 +112,38 @@ export const ClientsModule: React.FC = () => {
 
   const handleCreateClient = (e: React.FormEvent) => {
     e.preventDefault();
-    addClient({
-      fullName: formData.fullName,
-      profilePhoto: formData.profilePhoto || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    const cleanEmail = formData.email.trim().toLowerCase();
+    const cleanPassword = (formData.password || '').trim() || 'Dubai2026!';
+
+    const created = addClient({
+      fullName: formData.fullName.trim(),
+      profilePhoto:
+        formData.profilePhoto ||
+        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
       dateOfBirth: formData.dateOfBirth,
       gender: formData.gender,
-      email: formData.email,
-      whatsappNumber: formData.whatsappNumber,
-      residentialAddress: formData.residentialAddress,
+      email: cleanEmail,
+      password: cleanPassword,
+      whatsappNumber: formData.whatsappNumber.trim(),
+      residentialAddress: formData.residentialAddress.trim(),
       communityName: formData.communityName,
       emergencyContact: {
-        name: formData.emergencyContactName,
-        relationship: formData.emergencyContactRel,
-        phone: formData.emergencyContactPhone,
+        name: formData.emergencyContactName.trim(),
+        relationship: formData.emergencyContactRel.trim(),
+        phone: formData.emergencyContactPhone.trim(),
       },
       additionalNotes: formData.additionalNotes,
       assignedTrainerId: formData.assignedTrainerId,
     });
+
     setIsAddModalOpen(false);
+    setCreatedCredentialsModal({
+      id: created.id,
+      name: created.fullName,
+      email: cleanEmail,
+      password: cleanPassword,
+      whatsapp: formData.whatsappNumber.trim(),
+    });
   };
 
   const handleUpdateClient = (e: React.FormEvent) => {
@@ -149,7 +175,8 @@ export const ClientsModule: React.FC = () => {
         u.associatedId?.toLowerCase() === client.id.toLowerCase() ||
         u.email.toLowerCase() === client.email.toLowerCase()
     );
-    setClientPassword(matchedUser?.password || client.password || 'Dubai2026!');
+    const activePass = matchedUser?.password || client.password || 'Dubai2026!';
+    setClientPassword(activePass);
     setShowClientPassword(false);
     setPasswordFeedback('');
 
@@ -159,6 +186,7 @@ export const ClientsModule: React.FC = () => {
       dateOfBirth: client.dateOfBirth,
       gender: client.gender as any,
       email: client.email,
+      password: activePass,
       whatsappNumber: client.whatsappNumber,
       residentialAddress: client.residentialAddress,
       communityName: client.communityName,
@@ -219,6 +247,7 @@ export const ClientsModule: React.FC = () => {
                 dateOfBirth: '1990-05-15',
                 gender: 'Male',
                 email: '',
+                password: 'Dubai2026!',
                 whatsappNumber: '+97150',
                 residentialAddress: 'Villa M, Palm Jumeirah',
                 communityName: 'Palm Jumeirah',
@@ -1307,6 +1336,38 @@ export const ClientsModule: React.FC = () => {
                 />
               </div>
 
+              {/* Initial Client Portal Password */}
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block font-bold text-slate-800 uppercase tracking-wider text-[11px]">
+                    Initial Client Portal Password <span className="text-blue-600">*</span>
+                  </label>
+                  <span className="text-[10px] bg-blue-100 text-blue-700 font-bold px-2 py-0.5 rounded-full">
+                    Default: Dubai2026!
+                  </span>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showAddPassword ? 'text' : 'password'}
+                    required
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    placeholder="Dubai2026!"
+                    className="w-full p-2.5 pr-10 border border-slate-300 rounded-lg text-xs bg-white font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAddPassword(!showAddPassword)}
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                  >
+                    {showAddPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  The client will use their registered email and this password to log in to their personal client panel.
+                </p>
+              </div>
+
               <div className="pt-2 flex justify-end space-x-2">
                 <button
                   type="button"
@@ -1323,6 +1384,88 @@ export const ClientsModule: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Client Registered Successfully Credentials Modal */}
+      {createdCredentialsModal && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-200">
+            <div className="flex items-center space-x-3 pb-3 border-b border-slate-100">
+              <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+                <CheckCircle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-base">Client Registered Successfully</h3>
+                <p className="text-xs text-slate-500">Login credentials created and ready to share</p>
+              </div>
+            </div>
+
+            <div className="my-4 bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5 text-xs">
+              <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                <span className="text-slate-500 font-medium">Client ID:</span>
+                <span className="font-mono font-bold text-slate-900">{createdCredentialsModal.id}</span>
+              </div>
+              <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                <span className="text-slate-500 font-medium">Client Name:</span>
+                <span className="font-bold text-slate-900">{createdCredentialsModal.name}</span>
+              </div>
+              <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                <span className="text-slate-500 font-medium">Login Email:</span>
+                <span className="font-bold text-blue-700 font-mono">{createdCredentialsModal.email}</span>
+              </div>
+              <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                <span className="text-slate-500 font-medium">Portal Password:</span>
+                <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
+                  {createdCredentialsModal.password}
+                </span>
+              </div>
+              <div className="flex justify-between items-center py-1">
+                <span className="text-slate-500 font-medium">WhatsApp:</span>
+                <span className="font-medium text-slate-700">{createdCredentialsModal.whatsapp}</span>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const credsText = `Waiter Walk Personal Training Portal Access\n\nClient: ${createdCredentialsModal.name} (${createdCredentialsModal.id})\nLogin Portal: ${window.location.origin}\nEmail: ${createdCredentialsModal.email}\nPassword: ${createdCredentialsModal.password}\n\nPlease sign in to view your workouts and track your sessions.`;
+                  if (navigator?.clipboard) {
+                    navigator.clipboard.writeText(credsText);
+                    setCopiedCredential(true);
+                    setTimeout(() => setCopiedCredential(false), 2500);
+                  }
+                }}
+                className="w-full py-2.5 px-4 bg-slate-900 hover:bg-black text-white text-xs font-bold rounded-xl flex items-center justify-center space-x-2 transition-colors cursor-pointer"
+              >
+                {copiedCredential ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                <span>{copiedCredential ? 'Credentials Copied to Clipboard!' : 'Copy Full Login Credentials'}</span>
+              </button>
+
+              {createdCredentialsModal.whatsapp && (
+                <a
+                  href={`https://wa.me/${createdCredentialsModal.whatsapp.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
+                    `Hello ${createdCredentialsModal.name},\n\nYour Waiter Walk Personal Training portal access is ready!\n\nPortal: ${window.location.origin}\nLogin Email: ${createdCredentialsModal.email}\nInitial Password: ${createdCredentialsModal.password}\n\nPlease sign in to book sessions and track your progress.`
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center justify-center space-x-2 transition-colors"
+                >
+                  <Phone className="w-4 h-4" />
+                  <span>Send Credentials via WhatsApp</span>
+                </a>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setCreatedCredentialsModal(null)}
+                className="w-full py-2 px-4 border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

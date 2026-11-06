@@ -182,10 +182,12 @@ interface AppContextType {
   };
   incrementPromoCodeUsage: (code: string) => void;
 
-  // System Test Suite
+  // System Test Suite & Multi-Device Sync
   runSystemTests: () => TestResult[];
   testSuiteResults: TestResult[];
   resetToCleanProductionData: () => void;
+  exportDatabaseJSON: () => string;
+  importDatabaseJSON: (jsonData: string) => { success: boolean; message: string };
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -302,6 +304,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     slides,
     promoCodes,
   ]);
+
+  // Synchronize across browser tabs automatically in real-time
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === LOCAL_STORAGE_KEY && e.newValue) {
+        try {
+          const freshData = JSON.parse(e.newValue);
+          if (Array.isArray(freshData.clients)) setClients(freshData.clients);
+          if (Array.isArray(freshData.users)) setUsers(freshData.users);
+          if (Array.isArray(freshData.trainers)) setTrainers(freshData.trainers);
+          if (Array.isArray(freshData.clientPackages)) setClientPackages(freshData.clientPackages);
+          if (Array.isArray(freshData.packageDefinitions)) setPackageDefinitions(freshData.packageDefinitions);
+          if (Array.isArray(freshData.bookings)) setBookings(freshData.bookings);
+          if (Array.isArray(freshData.transactions)) setTransactions(freshData.transactions);
+          if (Array.isArray(freshData.payments)) setPayments(freshData.payments);
+          if (Array.isArray(freshData.subscriptions)) setSubscriptions(freshData.subscriptions);
+          if (Array.isArray(freshData.savedCards)) setSavedCards(freshData.savedCards);
+          if (Array.isArray(freshData.notifications)) setNotifications(freshData.notifications);
+          if (Array.isArray(freshData.auditLogs)) setAuditLogs(freshData.auditLogs);
+          if (freshData.settings) setSettings((prev) => ({ ...prev, ...freshData.settings }));
+          if (Array.isArray(freshData.slides)) setSlides(freshData.slides);
+          if (Array.isArray(freshData.promoCodes)) setPromoCodes(freshData.promoCodes);
+        } catch (err) {
+          console.error('Error syncing tab state from storage:', err);
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
 
   // Automatic 30-Day Package Expiry check engine
   useEffect(() => {
@@ -781,35 +814,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addClient = (clientData: Omit<Client, 'id' | 'age' | 'status' | 'createdAt'>): Client => {
     const id = `WW-CL-${1000 + clients.length + 1}`;
     const age = calculateAge(clientData.dateOfBirth);
+    const normalizedEmail = (clientData.email || '').trim().toLowerCase();
+    const assignedPassword = (clientData.password || '').trim() || 'Dubai2026!';
+
     const newClient: Client = {
       ...clientData,
       id,
       age,
+      email: normalizedEmail,
+      password: assignedPassword,
       status: 'Active',
       createdAt: new Date().toISOString(),
     };
     setClients((prev) => [...prev, newClient]);
 
-    // Create user login credential
+    // Create user login credential with matching password
     const newUser: User = {
-      id: `USR-CL-${clients.length + 1}`,
-      email: clientData.email,
+      id: `USR-CL-${id.replace('WW-CL-', '')}`,
+      email: normalizedEmail,
       role: 'client',
-      name: clientData.fullName,
+      name: clientData.fullName.trim(),
+      password: assignedPassword,
       associatedId: id,
       createdAt: new Date().toISOString(),
     };
-    setUsers((prev) => [...prev, newUser]);
+    setUsers((prev) => {
+      const filtered = prev.filter((u) => u.email.trim().toLowerCase() !== normalizedEmail);
+      return [...filtered, newUser];
+    });
 
-    logAudit('CREATE_CLIENT', `Created new client ${clientData.fullName} (${id})`);
+    logAudit('CREATE_CLIENT', `Created new client ${clientData.fullName} (${id}) with portal credentials`);
     return newClient;
   };
 
   const updateClient = (id: string, updates: Partial<Client>) => {
+    const cleanEmail = updates.email ? updates.email.trim().toLowerCase() : undefined;
+    const cleanPassword = updates.password ? updates.password.trim() : undefined;
+    const cleanName = updates.fullName ? updates.fullName.trim() : undefined;
+
     setClients((prev) =>
       prev.map((c) => {
         if (c.id === id) {
-          const updated = { ...c, ...updates };
+          const updated = {
+            ...c,
+            ...updates,
+            ...(cleanEmail ? { email: cleanEmail } : {}),
+            ...(cleanPassword ? { password: cleanPassword } : {}),
+            ...(cleanName ? { fullName: cleanName } : {}),
+          };
           if (updates.dateOfBirth) {
             updated.age = calculateAge(updates.dateOfBirth);
           }
@@ -818,6 +870,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return c;
       })
     );
+
+    // Keep user in sync if email, name, or password was updated
+    if (cleanEmail || cleanName || cleanPassword) {
+      setUsers((prev) =>
+        prev.map((u) => {
+          if (u.associatedId === id || (cleanEmail && u.email.toLowerCase() === cleanEmail)) {
+            return {
+              ...u,
+              ...(cleanEmail ? { email: cleanEmail } : {}),
+              ...(cleanName ? { name: cleanName } : {}),
+              ...(cleanPassword ? { password: cleanPassword } : {}),
+            };
+          }
+          return u;
+        })
+      );
+    }
+
     logAudit('UPDATE_CLIENT', `Updated client record for ${id}`);
   };
 
@@ -2494,6 +2564,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(initialUsers[0]);
   };
 
+  const exportDatabaseJSON = (): string => {
+    return JSON.stringify(
+      {
+        version: '2.0-clean-prod',
+        exportedAt: new Date().toISOString(),
+        users,
+        clients,
+        trainers,
+        packageDefinitions,
+        clientPackages,
+        bookings,
+        transactions,
+        payments,
+        subscriptions,
+        savedCards,
+        notifications,
+        auditLogs,
+        settings,
+        slides,
+        promoCodes,
+      },
+      null,
+      2
+    );
+  };
+
+  const importDatabaseJSON = (jsonData: string): { success: boolean; message: string } => {
+    try {
+      const data = JSON.parse(jsonData);
+      if (!data || typeof data !== 'object') {
+        return { success: false, message: 'Invalid JSON file format.' };
+      }
+      if (Array.isArray(data.clients)) setClients(data.clients);
+      if (Array.isArray(data.users)) setUsers(data.users);
+      if (Array.isArray(data.trainers)) setTrainers(data.trainers);
+      if (Array.isArray(data.clientPackages)) setClientPackages(data.clientPackages);
+      if (Array.isArray(data.packageDefinitions)) setPackageDefinitions(data.packageDefinitions);
+      if (Array.isArray(data.bookings)) setBookings(data.bookings);
+      if (Array.isArray(data.transactions)) setTransactions(data.transactions);
+      if (Array.isArray(data.payments)) setPayments(data.payments);
+      if (Array.isArray(data.subscriptions)) setSubscriptions(data.subscriptions);
+      if (Array.isArray(data.savedCards)) setSavedCards(data.savedCards);
+      if (Array.isArray(data.notifications)) setNotifications(data.notifications);
+      if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
+      if (data.settings) setSettings((prev) => ({ ...prev, ...data.settings }));
+      if (Array.isArray(data.slides)) setSlides(data.slides);
+      if (Array.isArray(data.promoCodes)) setPromoCodes(data.promoCodes);
+
+      logAudit(
+        'DATABASE_IMPORTED',
+        `Database state restored from external JSON backup with ${data.clients?.length || 0} clients.`
+      );
+      return {
+        success: true,
+        message: `Successfully imported ${data.clients?.length || 0} clients and complete database records.`,
+      };
+    } catch (err: any) {
+      return { success: false, message: `Failed to import database: ${err.message || 'Parse error'}` };
+    }
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -2567,6 +2698,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         runSystemTests,
         testSuiteResults,
         resetToCleanProductionData,
+        exportDatabaseJSON,
+        importDatabaseJSON,
       }}
     >
       {children}
