@@ -130,13 +130,20 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
     }
 
     const isTestMode = settings.stripeMode === 'test';
-    const activeSecretKey = isTestMode
-      ? settings.stripeSecretKey
-      : (settings.stripeLiveSecretKey || settings.stripeSecretKey);
+    const liveKey = (settings.stripeLiveSecretKey || '').trim();
+    const testKey = (settings.stripeSecretKey || '').trim();
+    const activeSecretKey = isTestMode ? (testKey || liveKey) : (liveKey || testKey);
 
-    if (!activeSecretKey || (!activeSecretKey.startsWith('sk_test_') && !activeSecretKey.startsWith('sk_live_'))) {
+    const isValidKeyFormat = activeSecretKey && (
+      activeSecretKey.startsWith('sk_test_') ||
+      activeSecretKey.startsWith('sk_live_') ||
+      activeSecretKey.startsWith('rk_test_') ||
+      activeSecretKey.startsWith('rk_live_')
+    );
+
+    if (!isValidKeyFormat) {
       setPayFeedbackMsg(
-        `Stripe Gateway Offline: Stripe API keys are not configured. Your Admin must enter the Stripe Secret Key (${isTestMode ? 'sk_test_...' : 'sk_live_...'}) in System Settings > Stripe Gateway to process live card payments.`
+        `Stripe Gateway Offline: Stripe API keys are not configured. Your Admin must enter the Stripe Secret Key (${isTestMode ? 'sk_test_...' : 'sk_live_...'}) in System Settings > Stripe Gateway, or set VITE_STRIPE_SECRET_KEY in Netlify to process real card payments.`
       );
       return;
     }
@@ -1719,13 +1726,19 @@ Personal training session packages are personal and non-transferable. Package re
 
             <form onSubmit={handlePayAndActivate} className="p-6 space-y-4">
               {payFeedbackMsg && (
-                <div className={`p-3.5 rounded-xl text-xs font-semibold flex items-center space-x-2 ${
-                  payFeedbackMsg.startsWith('Error')
-                    ? 'bg-red-50 text-red-700 border border-red-200'
-                    : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                }`}>
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>{payFeedbackMsg}</span>
+                <div
+                  className={`p-3.5 rounded-xl text-xs font-semibold flex items-start space-x-2.5 ${
+                    payFeedbackMsg.startsWith('Error') || payFeedbackMsg.startsWith('Stripe Gateway')
+                      ? 'bg-amber-50 text-amber-900 border border-amber-300'
+                      : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                  }`}
+                >
+                  {payFeedbackMsg.startsWith('Error') || payFeedbackMsg.startsWith('Stripe Gateway') ? (
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
+                  )}
+                  <span className="leading-relaxed">{payFeedbackMsg}</span>
                 </div>
               )}
 

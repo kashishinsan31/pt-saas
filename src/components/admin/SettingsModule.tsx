@@ -35,6 +35,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { PWAInstallButton } from '../common/PWAInstallButton';
+import { verifyStripeConnection } from '../../services/stripeApi';
 
 export const SettingsModule: React.FC = () => {
   const {
@@ -67,10 +68,43 @@ export const SettingsModule: React.FC = () => {
   const [showWipeModal, setShowWipeModal] = useState<boolean>(false);
   const [wipeSuccess, setWipeSuccess] = useState<boolean>(false);
   const [importFeedback, setImportFeedback] = useState<{ success: boolean; message: string } | null>(null);
+  const [testingStripe, setTestingStripe] = useState(false);
+  const [stripeTestResult, setStripeTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleTestStripeConnection = async () => {
+    const keyToTest = (formSettings.stripeLiveSecretKey || formSettings.stripeSecretKey)?.trim();
+
+    if (!keyToTest) {
+      setStripeTestResult({
+        success: false,
+        message: 'Please enter your Stripe Secret Key (sk_live_... or sk_test_...) to test connectivity.',
+      });
+      return;
+    }
+
+    setTestingStripe(true);
+    setStripeTestResult(null);
+
+    const res = await verifyStripeConnection(keyToTest);
+    setTestingStripe(false);
+    setStripeTestResult(res);
+  };
 
   const handleSaveSettings = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    updateSettings(formSettings);
+    const activeSecKey = (formSettings.stripeLiveSecretKey || formSettings.stripeSecretKey || '').trim();
+    const activePubKey = (formSettings.stripeLivePublishableKey || formSettings.stripePublishableKey || '').trim();
+    const detectedMode: 'test' | 'live' = activeSecKey.startsWith('sk_live_') ? 'live' : formSettings.stripeMode;
+
+    const cleanSettings = {
+      ...formSettings,
+      stripeMode: detectedMode,
+      stripeSecretKey: activeSecKey,
+      stripeLiveSecretKey: activeSecKey,
+      stripePublishableKey: activePubKey,
+      stripeLivePublishableKey: activePubKey,
+    };
+    updateSettings(cleanSettings);
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 3000);
   };
@@ -388,8 +422,8 @@ export const SettingsModule: React.FC = () => {
                   onChange={(e) => setFormSettings({ ...formSettings, stripeMode: e.target.value as 'test' | 'live' })}
                   className="w-full p-2.5 border border-slate-300 rounded-lg bg-white font-bold"
                 >
-                  <option value="test">Test Mode (Interactive Sandbox Enabled)</option>
-                  <option value="live">Live Production Mode (256-bit Encrypted)</option>
+                  <option value="live">Live Production Mode (256-bit Encrypted Real Charges)</option>
+                  <option value="test">Test Mode (Interactive Sandbox)</option>
                 </select>
               </div>
 
@@ -406,72 +440,146 @@ export const SettingsModule: React.FC = () => {
               </div>
             </div>
 
+            {/* Exactly 2 Stripe Keys Required */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1">
-                  Test Publishable Key <span className="text-amber-600 font-mono">(pk_test_...)</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="pk_test_51..."
-                  value={formSettings.stripePublishableKey || ''}
-                  onChange={(e) => setFormSettings({ ...formSettings, stripePublishableKey: e.target.value })}
-                  className="w-full p-2.5 border border-slate-300 rounded-lg font-mono text-xs"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1">
-                  Live Production Publishable Key <span className="text-emerald-600 font-mono">(pk_live_...)</span>
+                <label className="block font-bold text-slate-700 uppercase mb-1 flex items-center justify-between">
+                  <span>1. Stripe Publishable Key</span>
+                  <span className="text-[10px] text-blue-600 font-mono font-normal">pk_live_... / pk_test_...</span>
                 </label>
                 <input
                   type="text"
                   placeholder="pk_live_51..."
-                  value={formSettings.stripeLivePublishableKey || ''}
-                  onChange={(e) => setFormSettings({ ...formSettings, stripeLivePublishableKey: e.target.value })}
+                  value={formSettings.stripeLivePublishableKey || formSettings.stripePublishableKey || ''}
+                  onChange={(e) => {
+                    const val = e.target.value.trim();
+                    setFormSettings({
+                      ...formSettings,
+                      stripePublishableKey: val,
+                      stripeLivePublishableKey: val,
+                    });
+                  }}
                   className="w-full p-2.5 border border-slate-300 rounded-lg font-mono text-xs"
                 />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1 flex items-center justify-between">
-                  <span>Test Secret Key <span className="text-amber-600 font-mono">(sk_test_...)</span></span>
-                  <span className="text-[10px] text-amber-700 font-normal lowercase">(for dashboard.stripe.com reflection)</span>
-                </label>
-                <input
-                  type="password"
-                  placeholder="sk_test_51..."
-                  value={formSettings.stripeSecretKey || ''}
-                  onChange={(e) => setFormSettings({ ...formSettings, stripeSecretKey: e.target.value })}
-                  className="w-full p-2.5 border border-slate-300 rounded-lg font-mono text-xs"
-                />
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Your public client-side key from Stripe dashboard.
+                </span>
               </div>
 
               <div>
                 <label className="block font-bold text-slate-700 uppercase mb-1 flex items-center justify-between">
-                  <span>Live Secret Key <span className="text-emerald-600 font-mono">(sk_live_...)</span></span>
-                  <span className="text-[10px] text-emerald-700 font-normal lowercase">(for live production transactions)</span>
+                  <span>2. Stripe Secret Key</span>
+                  <span className="text-[10px] text-emerald-600 font-mono font-normal">sk_live_... / sk_test_...</span>
                 </label>
                 <input
                   type="password"
                   placeholder="sk_live_51..."
-                  value={formSettings.stripeLiveSecretKey || ''}
-                  onChange={(e) => setFormSettings({ ...formSettings, stripeLiveSecretKey: e.target.value })}
+                  value={formSettings.stripeLiveSecretKey || formSettings.stripeSecretKey || ''}
+                  onChange={(e) => {
+                    const val = e.target.value.trim();
+                    const autoMode = val.startsWith('sk_live_') ? 'live' : (val.startsWith('sk_test_') ? 'test' : formSettings.stripeMode);
+                    setFormSettings({
+                      ...formSettings,
+                      stripeMode: autoMode,
+                      stripeSecretKey: val,
+                      stripeLiveSecretKey: val,
+                    });
+                  }}
                   className="w-full p-2.5 border border-slate-300 rounded-lg font-mono text-xs"
                 />
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Your private secret key used for authorizing card payments.
+                </span>
               </div>
             </div>
 
-            <div className="p-3.5 bg-purple-50 border border-purple-200 rounded-xl text-purple-900 text-[11px] leading-relaxed space-y-1">
+            {/* Test Connection Button & Live Feedback */}
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-slate-50 border border-slate-200 rounded-xl">
+              <div>
+                <div className="font-bold text-slate-900 text-xs">Verify Stripe API Connectivity</div>
+                <div className="text-[11px] text-slate-500">
+                  Sends an instant real-time diagnostic request to <span className="font-mono">api.stripe.com</span> using your entered {formSettings.stripeMode === 'live' ? 'Live Secret Key' : 'Test Secret Key'}.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleTestStripeConnection}
+                disabled={testingStripe}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-colors flex items-center space-x-2 disabled:opacity-50 cursor-pointer"
+              >
+                {testingStripe ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Contacting Stripe API...</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Test Stripe Gateway Connection</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {stripeTestResult && (
+              <div
+                className={`p-3.5 rounded-xl border text-xs flex items-start space-x-2.5 animate-fadeIn ${
+                  stripeTestResult.success
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                    : 'bg-rose-50 border-rose-300 text-rose-900'
+                }`}
+              >
+                {stripeTestResult.success ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                )}
+                <div className="space-y-1">
+                  <div className="font-bold">
+                    {stripeTestResult.success ? 'Stripe Gateway Online & Verified!' : 'Stripe Connection Failed'}
+                  </div>
+                  <div className="text-[11px] leading-relaxed">{stripeTestResult.message}</div>
+                  {stripeTestResult.success && (
+                    <div className="text-[10px] text-emerald-700 font-semibold pt-0.5">
+                      ✓ Cards will tokenize and charge in real-time with official AED transactions at{' '}
+                      <a
+                        href="https://dashboard.stripe.com/payments"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline font-bold text-emerald-800"
+                      >
+                        dashboard.stripe.com/payments
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="p-3.5 bg-purple-50 border border-purple-200 rounded-xl text-purple-900 text-[11px] leading-relaxed space-y-2">
               <div className="font-bold flex items-center space-x-1.5 text-purple-950">
                 <Lock className="w-3.5 h-3.5 text-purple-700" />
-                <span>Stripe Dashboard Sync Information</span>
+                <span>Stripe Dashboard & Netlify Deployment Guide</span>
               </div>
               <p>
-                To have payments and auto-deduction test charges immediately reflect in your official Stripe Account Dashboard (at <a href="https://dashboard.stripe.com/payments" target="_blank" rel="noreferrer" className="underline font-bold text-purple-800">dashboard.stripe.com/payments</a>), enter your <strong>Stripe Secret Key</strong> above (<code>sk_test_...</code> for Test Mode or <code>sk_live_...</code> for Live Mode).
+                To enable live card processing and auto-deductions, obtain your API keys from{' '}
+                <a
+                  href="https://dashboard.stripe.com/apikeys"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline font-bold text-purple-800"
+                >
+                  dashboard.stripe.com/apikeys
+                </a>
+                .
               </p>
+              <div className="bg-white/70 p-2.5 rounded-lg border border-purple-200 font-mono text-[10px] text-slate-800 space-y-1">
+                <div className="font-bold text-purple-900 font-sans uppercase text-[10px]">
+                  Netlify Environment Variables (Only 2 variables needed):
+                </div>
+                <div>• VITE_STRIPE_PUBLISHABLE_KEY = your Publishable Key (pk_live_...)</div>
+                <div>• VITE_STRIPE_SECRET_KEY = your Live Secret Key (sk_live_...)</div>
+              </div>
             </div>
           </div>
 

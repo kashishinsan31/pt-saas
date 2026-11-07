@@ -248,6 +248,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         ...initialSettings,
         ...savedState.settings,
+        stripeSecretKey: (savedState.settings.stripeSecretKey?.trim()) || initialSettings.stripeSecretKey,
+        stripeLiveSecretKey: (savedState.settings.stripeLiveSecretKey?.trim()) || initialSettings.stripeLiveSecretKey,
+        stripePublishableKey: (savedState.settings.stripePublishableKey?.trim()) || initialSettings.stripePublishableKey,
+        stripeLivePublishableKey: (savedState.settings.stripeLivePublishableKey?.trim()) || initialSettings.stripeLivePublishableKey,
         paymentTermsAndConditions:
           savedState.settings.paymentTermsAndConditions || initialSettings.paymentTermsAndConditions,
         healthDeclarationText:
@@ -610,14 +614,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    const activeSecretKey = settings.stripeMode === 'live'
-      ? (settings.stripeLiveSecretKey || settings.stripeSecretKey)
-      : settings.stripeSecretKey;
+    const isLive = settings.stripeMode === 'live';
+    const liveKey = (settings.stripeLiveSecretKey || '').trim();
+    const testKey = (settings.stripeSecretKey || '').trim();
+    const activeSecretKey = isLive ? (liveKey || testKey) : (testKey || liveKey);
 
     let realChargeId = '';
     let stripeNotice = '';
 
-    if (activeSecretKey && (activeSecretKey.startsWith('sk_test_') || activeSecretKey.startsWith('sk_live_')) && client) {
+    const isValidKeyFormat = activeSecretKey && (
+      activeSecretKey.startsWith('sk_test_') ||
+      activeSecretKey.startsWith('sk_live_') ||
+      activeSecretKey.startsWith('rk_test_') ||
+      activeSecretKey.startsWith('rk_live_')
+    );
+
+    if (isValidKeyFormat && client) {
       const stripeRes = await processStripeApiCharge({
         secretKey: activeSecretKey,
         amountAED: targetAmountAED,

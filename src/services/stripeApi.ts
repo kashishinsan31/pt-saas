@@ -159,3 +159,46 @@ export async function processStripeApiCharge(req: StripeChargeRequest): Promise<
     };
   }
 }
+
+/**
+ * Validates Stripe Secret Key and verifies account connectivity in real time
+ */
+export async function verifyStripeConnection(
+  secretKey: string
+): Promise<{ success: boolean; message: string; livemode?: boolean }> {
+  const cleanKey = secretKey?.trim();
+  if (!cleanKey) {
+    return {
+      success: false,
+      message: 'Please enter a Stripe Secret Key (sk_test_... or sk_live_...) to test connectivity.',
+    };
+  }
+
+  try {
+    const res = await fetch('https://api.stripe.com/v1/balance', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${cleanKey}`,
+      },
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      return {
+        success: false,
+        message: data.error?.message || 'Invalid Stripe API key.',
+      };
+    }
+
+    return {
+      success: true,
+      livemode: data.livemode,
+      message: `Stripe Gateway Connected! Mode: ${data.livemode ? 'Live Production (sk_live_...)' : 'Test Sandbox (sk_test_...)'}. Live charges are ready to process.`,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `Network error connecting to Stripe: ${err?.message || 'Check your internet connection.'}`,
+    };
+  }
+}

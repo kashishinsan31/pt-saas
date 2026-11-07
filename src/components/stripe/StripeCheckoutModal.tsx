@@ -38,11 +38,16 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
   const { purchasePackage, settings, addSavedCard, promoCodes, validatePromoCode, incrementPromoCodeUsage } = useApp();
 
   const isTestMode = settings.stripeMode === 'test';
-  const activeSecretKey = isTestMode
-    ? settings.stripeSecretKey
-    : (settings.stripeLiveSecretKey || settings.stripeSecretKey);
+  const liveKey = (settings.stripeLiveSecretKey || '').trim();
+  const testKey = (settings.stripeSecretKey || '').trim();
+  const activeSecretKey = isTestMode ? (testKey || liveKey) : (liveKey || testKey);
   const hasConfiguredKeys = Boolean(
-    activeSecretKey && (activeSecretKey.startsWith('sk_test_') || activeSecretKey.startsWith('sk_live_'))
+    activeSecretKey && (
+      activeSecretKey.startsWith('sk_test_') ||
+      activeSecretKey.startsWith('sk_live_') ||
+      activeSecretKey.startsWith('rk_test_') ||
+      activeSecretKey.startsWith('rk_live_')
+    )
   );
   const activePublishableKey = isTestMode
     ? settings.stripePublishableKey || 'pk_test_51WaiterWalkDubaiKey998877'
@@ -139,16 +144,22 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
 
     setIsProcessing(true);
 
-    const activeSecretKey = isTestMode
-      ? settings.stripeSecretKey
-      : (settings.stripeLiveSecretKey || settings.stripeSecretKey);
+    const liveKey = (settings.stripeLiveSecretKey || '').trim();
+    const testKey = (settings.stripeSecretKey || '').trim();
+    const activeSecretKey = isTestMode ? (testKey || liveKey) : (liveKey || testKey);
 
     let realChargeId = '';
     let dashboardNotice = '';
-    if (!activeSecretKey || (!activeSecretKey.startsWith('sk_test_') && !activeSecretKey.startsWith('sk_live_'))) {
+    const isValidKeyFormat = activeSecretKey && (
+      activeSecretKey.startsWith('sk_test_') ||
+      activeSecretKey.startsWith('sk_live_') ||
+      activeSecretKey.startsWith('rk_test_') ||
+      activeSecretKey.startsWith('rk_live_')
+    );
+    if (!isValidKeyFormat) {
       setIsProcessing(false);
       setErrorMsg(
-        `Stripe Gateway Offline: Stripe API keys are not configured. To process real payments, please enter your Stripe Secret Key (${isTestMode ? 'sk_test_...' : 'sk_live_...'}) in Admin Panel > System Settings > Stripe Gateway.`
+        `Stripe Gateway Offline: Stripe API keys are not configured. To process real payments, your Administrator must enter the Stripe Secret Key (${isTestMode ? 'sk_test_...' : 'sk_live_...'}) in Admin Panel > System Settings > Stripe Gateway, or configure VITE_STRIPE_SECRET_KEY on Netlify.`
       );
       return;
     }
