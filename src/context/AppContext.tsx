@@ -111,7 +111,8 @@ interface AppContextType {
 
   payAndActivatePackage: (
     packageId: string,
-    cardDetails: { cardHolder: string; brand: string; last4: string; expiryMonth: string; expiryYear: string; isDefault?: boolean }
+    cardDetails: { cardHolder: string; brand: string; last4: string; expiryMonth: string; expiryYear: string; isDefault?: boolean },
+    customStripeChargeId?: string
   ) => { success: boolean; message: string };
 
   // Booking & Session Management
@@ -1093,7 +1094,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           packageName: effectivePackageName,
           amountAED: basePrice,
           cardBrand: cardDetails?.brand || 'Visa',
-          last4Digits: cardDetails?.last4 || '4242',
+          last4Digits: cardDetails?.last4 || '••••',
           startDate,
           nextPaymentDate: expiryDate,
           lastPaymentDate: startDate,
@@ -1255,7 +1256,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Pay and Activate Package by Client via Card
   const payAndActivatePackage = (
     packageId: string,
-    cardDetails: { cardHolder: string; brand: string; last4: string; expiryMonth: string; expiryYear: string; isDefault?: boolean }
+    cardDetails: { cardHolder: string; brand: string; last4: string; expiryMonth: string; expiryYear: string; isDefault?: boolean },
+    customStripeChargeId?: string
   ) => {
     const pkg = clientPackages.find((p) => p.id === packageId);
     if (!pkg) {
@@ -1275,7 +1277,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addSavedCard(client.id, {
       cardHolder: cardDetails.cardHolder || client.fullName,
       brand: cardDetails.brand || 'Visa',
-      last4: cardDetails.last4 || '4242',
+      last4: cardDetails.last4 || '••••',
       expiryMonth: cardDetails.expiryMonth || '12',
       expiryYear: cardDetails.expiryYear || '28',
       isDefault: cardDetails.isDefault ?? true,
@@ -1291,7 +1293,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             amountPaidAED: p.amountAED,
             outstandingBalanceAED: 0,
             paymentDate: startDate,
-            transactionReference: `tx_card_${Date.now()}_${cardDetails.last4}`,
+            transactionReference: customStripeChargeId || `tx_card_${Date.now()}_${cardDetails.last4}`,
           };
         }
         return p;

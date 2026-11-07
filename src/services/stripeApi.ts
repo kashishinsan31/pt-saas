@@ -1,9 +1,17 @@
 /**
- * Real Stripe API Integration Service
- * Makes direct HTTPS requests to Stripe's API (https://api.stripe.com/v1/charges)
- * using the configured Stripe Secret Key (sk_test_... or sk_live_...) so transactions
- * immediately reflect in the user's official Stripe Account Dashboard.
+ * Real-Time Stripe API Gateway Integration Service
+ * Communicates directly with Stripe REST API endpoints (https://api.stripe.com/v1)
+ * to tokenize cards and authorize live charges in real time.
+ * Transactions immediately reflect in the official Stripe Dashboard (dashboard.stripe.com).
  */
+
+export interface StripeCardDetails {
+  number: string;
+  expMonth: string;
+  expYear: string;
+  cvc: string;
+  name?: string;
+}
 
 export interface StripeChargeRequest {
   secretKey: string;
@@ -11,7 +19,8 @@ export interface StripeChargeRequest {
   description: string;
   statementDescriptor?: string;
   receiptEmail?: string;
-  cardToken?: string; // e.g. tok_visa, tok_mastercard, tok_amex, tok_chargeDeclined
+  card?: StripeCardDetails; // Real card details to tokenize and charge
+  cardToken?: string; // Pre-existing Stripe card or customer token
 }
 
 export interface StripeChargeResult {
@@ -30,30 +39,87 @@ export async function processStripeApiCharge(req: StripeChargeRequest): Promise<
   if (!secretKey) {
     return {
       success: false,
-      message: 'Stripe Secret Key missing. Please provide your sk_test_... or sk_live_... key in Settings.',
+      message: 'Stripe Secret Key missing. Please configure your live or test key in System Settings > Stripe Gateway.',
     };
   }
 
   // Convert AED amount to minor currency units (Fils: 1 AED = 100 Fils)
   const amountInFils = Math.round(req.amountAED * 100);
 
-  // Build URL-encoded form data payload for Stripe REST API
-  const params = new URLSearchParams();
-  params.append('amount', amountInFils.toString());
-  params.append('currency', 'aed');
-  params.append('source', req.cardToken || 'tok_visa');
-  params.append('description', req.description);
+  let sourceToken = req.cardToken?.trim() || '';
+
+  // 1. If card details are provided, tokenize card with Stripe in real time
+  if (req.card && req.card.number) {
+    try {
+      const cleanNumber = req.card.number.replace(/\s+/g, '');
+      const cleanMonth = req.card.expMonth.replace(/\D/g, '');
+      let cleanYear = req.card.expYear.replace(/\D/g, '');
+      if (cleanYear.length === 2) {
+        cleanYear = `20${cleanYear}`;
+      }
+      const cleanCvc = req.card.cvc.replace(/\D/g, '');
+
+      const tokenParams = new URLSearchParams();
+      tokenParams.append('card[number]', cleanNumber);
+      tokenParams.append('card[exp_month]', cleanMonth);
+      tokenParams.append('card[exp_year]', cleanYear);
+      tokenParams.append('card[cvc]', cleanCvc);
+      if (req.card.name) {
+        tokenParams.append('card[name]', req.card.name.trim());
+      }
+
+      const tokenResponse = await fetch('https://api.stripe.com/v1/tokens', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${secretKey}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: tokenParams.toString(),
+      });
+
+      const tokenData = await tokenResponse.json();
+
+      if (!tokenResponse.ok || tokenData.error) {
+        const errorMsg = tokenData.error?.message || 'Invalid credit card details.';
+        return {
+          success: false,
+          message: errorMsg,
+          rawError: tokenData.error,
+        };
+      }
+
+      sourceToken = tokenData.id;
+    } catch (tokenErr: any) {
+      return {
+        success: false,
+        message: `Stripe tokenization error: ${tokenErr?.message || 'Network request failed.'}`,
+      };
+    }
+  }
+
+  if (!sourceToken) {
+    return {
+      success: false,
+      message: 'Payment verification failed: No valid card credentials or token received.',
+    };
+  }
+
+  // 2. Authorize and capture charge via Stripe API in real time
+  const chargeParams = new URLSearchParams();
+  chargeParams.append('amount', amountInFils.toString());
+  chargeParams.append('currency', 'aed');
+  chargeParams.append('source', sourceToken);
+  chargeParams.append('description', req.description);
 
   if (req.statementDescriptor) {
-    // Statement descriptor suffix must be alphanumeric/spaces and <= 22 chars
     const cleanDescriptor = req.statementDescriptor.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 22).trim();
     if (cleanDescriptor) {
-      params.append('statement_descriptor_suffix', cleanDescriptor);
+      chargeParams.append('statement_descriptor_suffix', cleanDescriptor);
     }
   }
 
   if (req.receiptEmail) {
-    params.append('receipt_email', req.receiptEmail);
+    chargeParams.append('receipt_email', req.receiptEmail.trim());
   }
 
   try {
@@ -63,13 +129,13 @@ export async function processStripeApiCharge(req: StripeChargeRequest): Promise<
         'Authorization': `Bearer ${secretKey}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: params.toString(),
+      body: chargeParams.toString(),
     });
 
     const data = await response.json();
 
     if (!response.ok || data.error) {
-      const errMessage = data.error?.message || `Stripe API error (${response.status}): ${response.statusText}`;
+      const errMessage = data.error?.message || `Stripe payment declined (${response.status}): ${response.statusText}`;
       return {
         success: false,
         message: errMessage,
@@ -77,19 +143,19 @@ export async function processStripeApiCharge(req: StripeChargeRequest): Promise<
       };
     }
 
-    // Successfully created charge in real Stripe account
+    // Successfully created real charge in Stripe account
     return {
       success: true,
       stripeChargeId: data.id,
       stripePaymentIntentId: data.payment_intent || data.id,
       status: data.status,
       livemode: data.livemode,
-      message: `Charge successfully recorded in Stripe Dashboard! (ID: ${data.id})`,
+      message: `Charge of AED ${req.amountAED} processed in real-time on Stripe! (Charge ID: ${data.id})`,
     };
   } catch (error: any) {
     return {
       success: false,
-      message: `Failed to connect to Stripe API: ${error?.message || 'Network error'}`,
+      message: `Failed to connect to Stripe gateway: ${error?.message || 'Network error'}`,
     };
   }
 }

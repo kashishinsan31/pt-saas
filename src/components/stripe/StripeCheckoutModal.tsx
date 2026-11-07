@@ -48,16 +48,16 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
     ? settings.stripePublishableKey || 'pk_test_51WaiterWalkDubaiKey998877'
     : settings.stripeLivePublishableKey || settings.stripePublishableKey || 'pk_live_51WaiterWalkDubaiProductionKey998877';
 
-  const [cardNumber, setCardNumber] = useState('4242 4242 4242 4242');
-  const [expiry, setExpiry] = useState('12/28');
-  const [cvc, setCvc] = useState('123');
+  const [cardNumber, setCardNumber] = useState('');
+  const [expiry, setExpiry] = useState('');
+  const [cvc, setCvc] = useState('');
   const [cardHolder, setCardHolder] = useState(client.fullName);
   const [saveCardForFuture, setSaveCardForFuture] = useState(true);
   const [isRecurring, setIsRecurring] = useState(true);
   const [consentChecked, setConsentChecked] = useState(false);
   const [termsAgreed, setTermsAgreed] = useState(false);
 
-  const [simulateFailure, setSimulateFailure] = useState(false);
+  const [simulateFailure] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -71,7 +71,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
     if (/^5[1-5]/.test(clean) || /^2[2-7]/.test(clean)) return 'Mastercard';
     if (/^3[47]/.test(clean)) return 'American Express';
     if (/^6(?:011|5)/.test(clean)) return 'Discover';
-    return 'Visa';
+    return clean.length > 0 ? 'Visa' : 'Card';
   };
 
   const detectedBrand = getCardBrand(cardNumber);
@@ -95,32 +95,6 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
       raw = raw.slice(0, 2) + '/' + raw.slice(2, 4);
     }
     setExpiry(raw.slice(0, 5));
-    setErrorMsg('');
-  };
-
-  // Quick fill test cards in Test Mode
-  const fillTestCard = (type: 'visa' | 'mc' | 'amex' | 'decline') => {
-    if (type === 'visa') {
-      setCardNumber('4242 4242 4242 4242');
-      setExpiry('12/28');
-      setCvc('123');
-      setSimulateFailure(false);
-    } else if (type === 'mc') {
-      setCardNumber('5555 5555 5555 5555');
-      setExpiry('12/28');
-      setCvc('123');
-      setSimulateFailure(false);
-    } else if (type === 'amex') {
-      setCardNumber('3782 8224 6838 287');
-      setExpiry('12/28');
-      setCvc('1234');
-      setSimulateFailure(false);
-    } else if (type === 'decline') {
-      setCardNumber('4000 0024 0000 0000');
-      setExpiry('12/28');
-      setCvc('123');
-      setSimulateFailure(true);
-    }
     setErrorMsg('');
   };
 
@@ -179,14 +153,20 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
       return;
     }
 
-    const cardTok = (simulateFailure || cleanCard === '4000002400000000') ? 'tok_chargeDeclined' : 'tok_visa';
+    const [expM, expY] = expiry.split('/');
     const stripeRes = await processStripeApiCharge({
       secretKey: activeSecretKey,
       amountAED: totalPayableAED,
       description: `${packageDef.name} for ${client.fullName} - Waiter Walk Dubai`,
       statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
       receiptEmail: client.email,
-      cardToken: cardTok,
+      card: {
+        number: cleanCard,
+        expMonth: expM,
+        expYear: expY,
+        cvc: cvc.trim(),
+        name: (cardHolder || client.fullName).trim(),
+      },
     });
 
     if (!stripeRes.success) {
@@ -198,8 +178,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
     realChargeId = stripeRes.stripeChargeId || '';
     dashboardNotice = ` • Reflected Live in Stripe Dashboard! (Charge ID: ${realChargeId})`;
 
-    const last4 = cleanCard.slice(-4) || '4242';
-    const [expM, expY] = expiry.split('/');
+    const last4 = cleanCard.length >= 4 ? cleanCard.slice(-4) : '••••';
 
     // Save card to savedCards wallet if requested
     if (saveCardForFuture) {
@@ -332,7 +311,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
         </div>
 
         {/* Gateway Configuration Status Banner */}
-        {!hasConfiguredKeys && (
+        {!hasConfiguredKeys ? (
           <div className="bg-amber-50 border-b border-amber-200 p-3.5 text-xs text-amber-900 flex items-start space-x-2.5">
             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <div className="space-y-0.5">
@@ -340,9 +319,19 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
                 Stripe Gateway Not Configured ({isTestMode ? 'Test Sandbox Mode' : 'Live Production Mode'})
               </span>
               <p className="text-[11px] text-amber-800 leading-relaxed">
-                No Stripe Secret Key (<code>{isTestMode ? 'sk_test_...' : 'sk_live_...'}</code>) is configured in System Settings. Payment processing is blocked until your Stripe API keys are configured in <strong>Admin Panel &gt; System Settings &gt; Stripe Payment Gateway</strong>.
+                No Stripe Secret Key (<code>{isTestMode ? 'sk_test_...' : 'sk_live_...'}</code>) is configured in System Settings. Real-time payments are blocked until your Stripe API keys are configured in <strong>Admin Panel &gt; System Settings &gt; Stripe Payment Gateway</strong>.
               </p>
             </div>
+          </div>
+        ) : (
+          <div className="bg-emerald-50/90 border-b border-emerald-200 px-4 py-2 text-xs text-emerald-900 flex items-center justify-between">
+            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-emerald-800">
+              <ShieldCheck className="w-4 h-4 text-emerald-600" />
+              <span>Real-Time Stripe Gateway Connected • Live 256-bit Encrypted</span>
+            </span>
+            <span className="text-[10px] font-mono text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-full font-bold">
+              {isTestMode ? 'Stripe Sandbox' : 'Stripe Live'}
+            </span>
           </div>
         )}
 
@@ -463,55 +452,6 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
 
         {/* Form Body */}
         <form onSubmit={handleCheckout} className="p-5 space-y-4 max-h-[60vh] overflow-y-auto">
-          
-          {/* Test Card Quick Fill Banner in Test Mode */}
-          {isTestMode && (
-            <div className="p-3 bg-gradient-to-r from-amber-50 to-indigo-50 border border-amber-200/80 rounded-2xl text-xs space-y-2">
-              <div className="flex items-center justify-between font-extrabold text-amber-950">
-                <span className="flex items-center space-x-1.5">
-                  <Sparkles className="w-4 h-4 text-amber-600" />
-                  <span>Stripe Test Mode Sandbox Controls</span>
-                </span>
-                <span className="text-[10px] font-mono text-slate-500 truncate max-w-[140px]" title={activePublishableKey}>
-                  {activePublishableKey.slice(0, 14)}...
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-600">
-                Click any test card below to populate test credentials instantly:
-              </p>
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                <button
-                  type="button"
-                  onClick={() => fillTestCard('visa')}
-                  className="px-2.5 py-1 bg-white hover:bg-slate-100 text-blue-900 border border-blue-200 rounded-lg text-[11px] font-bold transition-all shadow-2xs cursor-pointer"
-                >
-                  💳 Visa (4242)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => fillTestCard('mc')}
-                  className="px-2.5 py-1 bg-white hover:bg-slate-100 text-indigo-900 border border-indigo-200 rounded-lg text-[11px] font-bold transition-all shadow-2xs cursor-pointer"
-                >
-                  💳 Mastercard (5555)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => fillTestCard('amex')}
-                  className="px-2.5 py-1 bg-white hover:bg-slate-100 text-cyan-900 border border-cyan-200 rounded-lg text-[11px] font-bold transition-all shadow-2xs cursor-pointer"
-                >
-                  💳 Amex (3782)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => fillTestCard('decline')}
-                  className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-lg text-[11px] font-bold transition-all shadow-2xs cursor-pointer"
-                >
-                  ⚠️ Decline Test
-                </button>
-              </div>
-            </div>
-          )}
-
           {errorMsg && (
             <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-2xl p-3.5 flex items-start space-x-2.5 animate-in fade-in">
               <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
@@ -555,7 +495,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
                 required
                 value={cardNumber}
                 onChange={handleCardNumberChange}
-                placeholder="4242 4242 4242 4242"
+                placeholder="•••• •••• •••• ••••"
                 className="w-full px-3.5 py-2.5 text-xs font-mono font-bold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 bg-white tracking-wider"
               />
               <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center space-x-1">
@@ -574,7 +514,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
                 required
                 value={expiry}
                 onChange={handleExpiryChange}
-                placeholder="12/28"
+                placeholder="MM/YY"
                 maxLength={5}
                 className="w-full px-3 py-2.5 text-xs font-mono font-bold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 text-center bg-white"
               />
@@ -589,7 +529,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
                 maxLength={4}
                 value={cvc}
                 onChange={(e) => setCvc(e.target.value.replace(/\D/g, ''))}
-                placeholder="123"
+                placeholder="CVC"
                 className="w-full px-3 py-2.5 text-xs font-mono font-bold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 text-center bg-white"
               />
             </div>
@@ -702,7 +642,7 @@ Personal training session packages are personal and non-transferable. Package re
             ) : isProcessing ? (
               <>
                 <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>Authorizing Stripe Payment...</span>
+                <span>Communicating with Stripe in Real-Time...</span>
               </>
             ) : (
               <>

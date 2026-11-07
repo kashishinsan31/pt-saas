@@ -32,6 +32,7 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { StripeCheckoutModal } from '../stripe/StripeCheckoutModal';
+import { processStripeApiCharge } from '../../services/stripeApi';
 import { DashboardSlider } from '../common/DashboardSlider';
 import { HealthDeclarationModal } from '../common/HealthDeclarationModal';
 import { AddHealthIssueModal } from '../common/AddHealthIssueModal';
@@ -94,58 +95,121 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
   const [isPayPendingModalOpen, setIsPayPendingModalOpen] = useState(false);
   const [selectedPendingPkg, setSelectedPendingPkg] = useState<any>(null);
   const [payCardHolder, setPayCardHolder] = useState(client.fullName);
-  const [payCardNumber, setPayCardNumber] = useState('4242 4242 4242 4242');
-  const [payExpiryMonth, setPayExpiryMonth] = useState('12');
-  const [payExpiryYear, setPayExpiryYear] = useState('2028');
-  const [payCvc, setPayCvc] = useState('123');
+  const [payCardNumber, setPayCardNumber] = useState('');
+  const [payExpiryMonth, setPayExpiryMonth] = useState('');
+  const [payExpiryYear, setPayExpiryYear] = useState('');
+  const [payCvc, setPayCvc] = useState('');
   const [payBrand, setPayBrand] = useState('Visa');
   const [paySaveDefaultCard, setPaySaveDefaultCard] = useState(true);
   const [payAgreeTerms, setPayAgreeTerms] = useState(false);
   const [payFeedbackMsg, setPayFeedbackMsg] = useState('');
   const [isProcessingPay, setIsProcessingPay] = useState(false);
 
-  const handlePayAndActivate = (e: React.FormEvent) => {
+  const handlePayAndActivate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPendingPkg) return;
     if (!payAgreeTerms) {
       setPayFeedbackMsg('Error: Please tick the box to agree to the Payment Terms & Conditions and Refund Policy.');
       return;
     }
+
+    const cleanPayCard = payCardNumber.replace(/\s+/g, '');
+    if (cleanPayCard.length < 15) {
+      setPayFeedbackMsg('Error: Please enter a valid 15 or 16 digit card number.');
+      return;
+    }
+
+    if (!payExpiryMonth || !payExpiryYear) {
+      setPayFeedbackMsg('Error: Please enter card expiration month and year.');
+      return;
+    }
+
+    if (!payCvc || payCvc.length < 3) {
+      setPayFeedbackMsg('Error: Please enter a valid 3 or 4 digit CVC security code.');
+      return;
+    }
+
+    const isTestMode = settings.stripeMode === 'test';
+    const activeSecretKey = isTestMode
+      ? settings.stripeSecretKey
+      : (settings.stripeLiveSecretKey || settings.stripeSecretKey);
+
+    if (!activeSecretKey || (!activeSecretKey.startsWith('sk_test_') && !activeSecretKey.startsWith('sk_live_'))) {
+      setPayFeedbackMsg(
+        `Stripe Gateway Offline: Stripe API keys are not configured. Your Admin must enter the Stripe Secret Key (${isTestMode ? 'sk_test_...' : 'sk_live_...'}) in System Settings > Stripe Gateway to process live card payments.`
+      );
+      return;
+    }
+
     setIsProcessingPay(true);
     setPayFeedbackMsg('');
 
-    setTimeout(() => {
-      const last4 = payCardNumber.slice(-4) || '4242';
-      const res = payAndActivatePackage(selectedPendingPkg.id, {
-        cardHolder: payCardHolder,
-        brand: payBrand,
-        last4,
-        expiryMonth: payExpiryMonth,
-        expiryYear: payExpiryYear,
-        isDefault: paySaveDefaultCard,
+    try {
+      const pkgDef = packageDefinitions.find((p) => p.id === selectedPendingPkg.packageDefinitionId);
+      const pkgAmountAED = selectedPendingPkg.priceAED || pkgDef?.priceAED || 3500;
+
+      // Communicate in real-time with Stripe Gateway to tokenize card and charge
+      const stripeRes = await processStripeApiCharge({
+        secretKey: activeSecretKey,
+        amountAED: pkgAmountAED,
+        description: `Pending Package Payment: ${selectedPendingPkg.name || pkgDef?.name || 'PT Package'} for ${client.fullName} - Waiter Walk Dubai`,
+        statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
+        receiptEmail: client.email,
+        card: {
+          number: cleanPayCard,
+          expMonth: payExpiryMonth,
+          expYear: payExpiryYear,
+          cvc: payCvc.trim(),
+          name: (payCardHolder || client.fullName).trim(),
+        },
       });
+
+      if (!stripeRes.success) {
+        setIsProcessingPay(false);
+        setPayFeedbackMsg(`Stripe Gateway Error: ${stripeRes.message}`);
+        return;
+      }
+
+      const last4 = cleanPayCard.length >= 4 ? cleanPayCard.slice(-4) : '••••';
+      const res = payAndActivatePackage(
+        selectedPendingPkg.id,
+        {
+          cardHolder: payCardHolder,
+          brand: payBrand,
+          last4,
+          expiryMonth: payExpiryMonth,
+          expiryYear: payExpiryYear,
+          isDefault: paySaveDefaultCard,
+        },
+        stripeRes.stripeChargeId
+      );
 
       setIsProcessingPay(false);
       if (res.success) {
-        setPayFeedbackMsg(res.message);
+        setPayFeedbackMsg(
+          `Payment Received in Real Time! Live on Stripe Dashboard (Charge ID: ${stripeRes.stripeChargeId})`
+        );
         setTimeout(() => {
           setIsPayPendingModalOpen(false);
           setPayFeedbackMsg('');
           setPayAgreeTerms(false);
-        }, 1800);
+        }, 2200);
       } else {
         setPayFeedbackMsg(`Error: ${res.message}`);
       }
-    }, 1000);
+    } catch (err: any) {
+      setIsProcessingPay(false);
+      setPayFeedbackMsg(`Gateway Connection Error: ${err.message || 'Failed to connect to Stripe'}`);
+    }
   };
 
   // Add Card Modal State
   const [isAddCardModalOpen, setIsAddCardModalOpen] = useState(false);
   const [cardHolderName, setCardHolderName] = useState(client.fullName);
-  const [cardNumber, setCardNumber] = useState('4242 4242 4242 4242');
-  const [expiryMonth, setExpiryMonth] = useState('12');
-  const [expiryYear, setExpiryYear] = useState('2028');
-  const [cardCvc, setCardCvc] = useState('123');
+  const [cardNumber, setCardNumber] = useState('');
+  const [expiryMonth, setExpiryMonth] = useState('');
+  const [expiryYear, setExpiryYear] = useState('');
+  const [cardCvc, setCardCvc] = useState('');
   const [cardBrand, setCardBrand] = useState('Visa');
   const [makeDefault, setMakeDefault] = useState(true);
   const [agreeTermsAddCard, setAgreeTermsAddCard] = useState(false);
@@ -215,7 +279,8 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
       setAddCardError('Please tick the box to agree to the Payment Terms & Conditions and Refund Policy.');
       return;
     }
-    const last4 = cardNumber.slice(-4) || '4242';
+    const cleanAddCard = cardNumber.replace(/\s+/g, '');
+    const last4 = cleanAddCard.length >= 4 ? cleanAddCard.slice(-4) : '••••';
     addSavedCard(clientId, {
       cardHolder: cardHolderName,
       brand: cardBrand,
@@ -1290,7 +1355,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
                   required
                   value={cardNumber}
                   onChange={(e) => setCardNumber(e.target.value)}
-                  placeholder="4242 4242 4242 4242"
+                  placeholder="•••• •••• •••• ••••"
                   className="w-full p-2.5 border border-slate-300 rounded-lg font-mono focus:ring-2 focus:ring-blue-600"
                 />
               </div>
@@ -1303,7 +1368,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
                     required
                     value={expiryMonth}
                     onChange={(e) => setExpiryMonth(e.target.value)}
-                    placeholder="12"
+                    placeholder="MM"
                     className="w-full p-2 border border-slate-300 rounded-lg font-mono text-center focus:ring-2 focus:ring-blue-600"
                   />
                 </div>
@@ -1314,7 +1379,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
                     required
                     value={expiryYear}
                     onChange={(e) => setExpiryYear(e.target.value)}
-                    placeholder="2028"
+                    placeholder="YYYY"
                     className="w-full p-2 border border-slate-300 rounded-lg font-mono text-center focus:ring-2 focus:ring-blue-600"
                   />
                 </div>
@@ -1714,7 +1779,7 @@ Personal training session packages are personal and non-transferable. Package re
                       value={payCardNumber}
                       onChange={(e) => setPayCardNumber(e.target.value)}
                       className="w-full p-2 border border-slate-300 rounded-lg text-xs font-mono bg-white"
-                      placeholder="4242 4242 4242 4242"
+                      placeholder="•••• •••• •••• ••••"
                     />
                   </div>
 
@@ -1749,7 +1814,7 @@ Personal training session packages are personal and non-transferable. Package re
                         value={payCvc}
                         onChange={(e) => setPayCvc(e.target.value)}
                         className="w-full p-2 border border-slate-300 rounded-lg text-xs text-center font-mono bg-white"
-                        placeholder="123"
+                        placeholder="CVC"
                       />
                     </div>
                   </div>

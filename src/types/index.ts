@@ -249,7 +249,7 @@ export interface SubscriptionRecord {
   packageName: string;
   amountAED: number;
   cardBrand: string; // e.g. Visa, Mastercard
-  last4Digits: string; // e.g. 4242
+  last4Digits: string; // e.g. 5821
   startDate: string;
   nextPaymentDate: string;
   lastPaymentDate: string;
