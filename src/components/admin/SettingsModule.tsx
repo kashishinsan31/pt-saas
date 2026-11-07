@@ -581,16 +581,7 @@ export const SettingsModule: React.FC = () => {
                 <div>• VITE_STRIPE_SECRET_KEY = your Live Secret Key (sk_live_...)</div>
               </div>
               <p className="text-[10px] text-purple-800 pt-1">
-                <strong>Stripe Security Note:</strong> Client checkouts use <strong>Stripe Elements</strong> (via your Publishable Key) for PCI-compliant tokenization. If you wish to accept raw card numbers directly over the REST API, enable <em>"Process payments unsafely"</em> in your Stripe account at{' '}
-                <a
-                  href="https://dashboard.stripe.com/settings/integration"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline font-bold text-purple-900"
-                >
-                  dashboard.stripe.com/settings/integration
-                </a>
-                .
+                <strong>Stripe Security & PCI-DSS:</strong> Client checkouts and saved cards strictly use <strong>Stripe Elements (Stripe.js)</strong> and vaulted Stripe Customer tokens. Credit card data is encrypted directly with Stripe's servers without ever exposing raw numbers.
               </p>
             </div>
           </div>

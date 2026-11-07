@@ -35,7 +35,10 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { purchasePackage, settings, addSavedCard, promoCodes, validatePromoCode, incrementPromoCodeUsage } = useApp();
+  const { purchasePackage, settings, addSavedCard, savedCards, promoCodes, validatePromoCode, incrementPromoCodeUsage } = useApp();
+
+  const clientSavedCards = savedCards.filter((c) => c.clientId === client.id);
+  const [selectedSavedCardId, setSelectedSavedCardId] = useState<string>('NEW_CARD');
 
   const isTestMode = settings.stripeMode === 'test';
   const liveKey = (settings.stripeLiveSecretKey || '').trim();
@@ -67,22 +70,31 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
   const stripeContainerRef = useRef<HTMLDivElement>(null);
   const [stripeInstance, setStripeInstance] = useState<any>(null);
   const [cardElementInstance, setCardElementInstance] = useState<any>(null);
-  const [useStripeElements, setUseStripeElements] = useState(true);
   const [stripeCardReady, setStripeCardReady] = useState(false);
 
-  const [cardNumber, setCardNumber] = useState('');
-  const [expiry, setExpiry] = useState('');
-  const [cvc, setCvc] = useState('');
   const [cardHolder, setCardHolder] = useState(client.fullName);
   const [saveCardForFuture, setSaveCardForFuture] = useState(true);
   const [isRecurring, setIsRecurring] = useState(true);
   const [consentChecked, setConsentChecked] = useState(false);
   const [termsAgreed, setTermsAgreed] = useState(false);
 
-  const [simulateFailure] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+
+  // Default to primary saved card if available when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      if (clientSavedCards.length > 0) {
+        const def = clientSavedCards.find((c) => c.isDefault) || clientSavedCards[0];
+        setSelectedSavedCardId(def.id);
+      } else {
+        setSelectedSavedCardId('NEW_CARD');
+      }
+      setErrorMsg('');
+      setSuccessMsg('');
+    }
+  }, [isOpen]);
 
   // Initialize Stripe.js instance
   useEffect(() => {
@@ -101,9 +113,9 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
     };
   }, [isOpen, activePublishableKey]);
 
-  // Mount Stripe Elements card field
+  // Mount Stripe Elements card field strictly when entering a new card
   useEffect(() => {
-    if (!stripeInstance || !stripeContainerRef.current || !isOpen || !useStripeElements) return;
+    if (!stripeInstance || !stripeContainerRef.current || !isOpen || selectedSavedCardId !== 'NEW_CARD') return;
 
     stripeContainerRef.current.innerHTML = '';
     const elements = stripeInstance.elements();
@@ -146,43 +158,9 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
       }
       setStripeCardReady(false);
     };
-  }, [stripeInstance, isOpen, useStripeElements]);
+  }, [stripeInstance, isOpen, selectedSavedCardId]);
 
   if (!isOpen) return null;
-
-  // Detect Card Brand from card number digits
-  const getCardBrand = (num: string) => {
-    const clean = num.replace(/\s+/g, '');
-    if (clean.startsWith('4')) return 'Visa';
-    if (/^5[1-5]/.test(clean) || /^2[2-7]/.test(clean)) return 'Mastercard';
-    if (/^3[47]/.test(clean)) return 'American Express';
-    if (/^6(?:011|5)/.test(clean)) return 'Discover';
-    return clean.length > 0 ? 'Visa' : 'Card';
-  };
-
-  const detectedBrand = getCardBrand(cardNumber);
-
-  // Format Card Number input with spaces every 4 digits
-  const handleCardNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value.replace(/\D/g, '');
-    let formatted = '';
-    for (let i = 0; i < raw.length && i < 16; i++) {
-      if (i > 0 && i % 4 === 0) formatted += ' ';
-      formatted += raw[i];
-    }
-    setCardNumber(formatted);
-    setErrorMsg('');
-  };
-
-  // Format Expiry MM/YY
-  const handleExpiryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let raw = e.target.value.replace(/\D/g, '');
-    if (raw.length >= 2) {
-      raw = raw.slice(0, 2) + '/' + raw.slice(2, 4);
-    }
-    setExpiry(raw.slice(0, 5));
-    setErrorMsg('');
-  };
 
   const handleCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -219,174 +197,218 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
 
     setIsProcessing(true);
 
-    let cardToken = '';
-    let brand = detectedBrand;
-    let last4Digits = '';
-    let expMonthToSave = '';
-    let expYearToSave = '';
+    // 1. If paying with a Selected Saved Card (PCI Vaulted)
+    if (selectedSavedCardId !== 'NEW_CARD') {
+      const selectedCard = clientSavedCards.find((c) => c.id === selectedSavedCardId);
+      if (!selectedCard) {
+        setIsProcessing(false);
+        setErrorMsg('Selected saved card could not be found. Please select a valid card or enter a new card.');
+        return;
+      }
 
-    // If using Stripe Elements, tokenize securely via Stripe.js
-    if (useStripeElements && stripeInstance && cardElementInstance) {
-      try {
-        const tokenResult = await stripeInstance.createToken(cardElementInstance, {
-          name: (cardHolder || client.fullName).trim(),
-        });
+      let customerIdToVault = selectedCard.stripeCustomerId || client.stripeCustomerId;
+      const cardTokenToUse = selectedCard.stripeToken;
 
-        if (tokenResult.error) {
-          setIsProcessing(false);
-          setErrorMsg(`Card Error: ${tokenResult.error.message}`);
-          return;
-        }
-
-        if (tokenResult.token) {
-          cardToken = tokenResult.token.id;
-          const cardObj = tokenResult.token.card;
-          if (cardObj) {
-            brand = cardObj.brand ? (cardObj.brand.charAt(0).toUpperCase() + cardObj.brand.slice(1)) : 'Visa';
-            last4Digits = cardObj.last4 || '••••';
-            expMonthToSave = String(cardObj.exp_month || '12');
-            expYearToSave = String(cardObj.exp_year || '2028');
+      if (!customerIdToVault && cardTokenToUse && activeSecretKey) {
+        try {
+          const custRes = await createStripeCustomer({
+            secretKey: activeSecretKey,
+            email: client.email,
+            name: client.fullName,
+            cardToken: cardTokenToUse,
+            clientId: client.id,
+          });
+          if (custRes.success && custRes.customerId) {
+            customerIdToVault = custRes.customerId;
           }
+        } catch (e) {
+          console.warn('Customer vault notice:', e);
         }
-      } catch (err: any) {
-        setIsProcessing(false);
-        setErrorMsg(`Stripe tokenization error: ${err?.message || 'Failed to process card details.'}`);
-        return;
-      }
-    } else {
-      // Manual input validation
-      const cleanCard = cardNumber.replace(/\s+/g, '');
-      if (cleanCard.length < 15) {
-        setIsProcessing(false);
-        setErrorMsg('Invalid Card Number: Please enter a valid 15 or 16 digit credit/debit card number.');
-        return;
       }
 
-      if (!expiry || !expiry.includes('/') || expiry.length < 5) {
-        setIsProcessing(false);
-        setErrorMsg('Invalid Expiry Date: Please enter MM/YY (e.g., 12/28).');
-        return;
-      }
+      const stripeRes = await processStripeApiCharge({
+        secretKey: activeSecretKey,
+        amountAED: totalPayableAED,
+        description: `${packageDef.name} for ${client.fullName} (Saved Card ${selectedCard.brand} ending in ${selectedCard.last4}) - Waiter Walk Dubai`,
+        statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
+        receiptEmail: client.email,
+        customerId: customerIdToVault || undefined,
+        cardToken: customerIdToVault ? undefined : (cardTokenToUse || (isTestMode ? 'tok_visa' : undefined)),
+      });
 
-      const [mmStr, yyStr] = expiry.split('/');
-      const mm = parseInt(mmStr, 10);
-      if (isNaN(mm) || mm < 1 || mm > 12) {
+      if (!stripeRes.success) {
         setIsProcessing(false);
-        setErrorMsg('Invalid Expiry Month: Month must be between 01 and 12.');
+        setErrorMsg(`Stripe Gateway Error: ${stripeRes.message}`);
         return;
       }
 
-      if (!cvc || cvc.length < 3) {
-        setIsProcessing(false);
-        setErrorMsg('Invalid Security Code: CVC / CVV must be 3 or 4 digits.');
-        return;
-      }
+      const realChargeId = stripeRes.stripeChargeId || '';
+      const dashboardNotice = ` • Reflected Live in Stripe Dashboard! (Charge ID: ${realChargeId})`;
 
-      brand = detectedBrand;
-      last4Digits = cleanCard.length >= 4 ? cleanCard.slice(-4) : '••••';
-      expMonthToSave = mmStr;
-      expYearToSave = yyStr.length === 2 ? `20${yyStr}` : yyStr;
-    }
+      const res = purchasePackage(
+        client.id,
+        packageDef.id,
+        'Stripe',
+        isRecurring,
+        { brand: selectedCard.brand, last4: selectedCard.last4 },
+        consentChecked,
+        realChargeId,
+        {
+          discountCode: appliedPromoCode,
+          discountAmountAED,
+          vatAmountAED,
+          totalAmountAED: totalPayableAED,
+        },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        customerIdToVault
+      );
 
-    const cleanCard = cardNumber.replace(/\s+/g, '');
-    const [expM, expY] = expiry.includes('/') ? expiry.split('/') : ['12', '28'];
-
-    // If client requested auto-pay or card saving, vault card to permanent Stripe Customer
-    let customerIdToVault = client.stripeCustomerId;
-    if (isSecKeyValid && cardToken && (saveCardForFuture || isRecurring)) {
-      try {
-        const custRes = await createStripeCustomer({
-          secretKey: activeSecretKey,
-          email: client.email,
-          name: client.fullName,
-          cardToken,
-          clientId: client.id,
-        });
-        if (custRes.success && custRes.customerId) {
-          customerIdToVault = custRes.customerId;
-        }
-      } catch (e) {
-        console.warn('Customer vaulting notice:', e);
-      }
-    }
-
-    const stripeRes = await processStripeApiCharge({
-      secretKey: activeSecretKey,
-      amountAED: totalPayableAED,
-      description: `${packageDef.name} for ${client.fullName} - Waiter Walk Dubai`,
-      statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
-      receiptEmail: client.email,
-      customerId: customerIdToVault || undefined,
-      cardToken: customerIdToVault ? undefined : (cardToken || undefined),
-      card: !cardToken && !customerIdToVault ? {
-        number: cleanCard,
-        expMonth: expM,
-        expYear: expY,
-        cvc: cvc.trim(),
-        name: (cardHolder || client.fullName).trim(),
-      } : undefined,
-    });
-
-    if (!stripeRes.success) {
       setIsProcessing(false);
-      setErrorMsg(`Stripe Gateway Error: ${stripeRes.message}`);
+
+      if (res.success) {
+        if (appliedPromoCode && appliedPromoCode !== 'PACKAGE_DISCOUNT') {
+          incrementPromoCodeUsage(appliedPromoCode);
+        }
+        setSuccessMsg(`Payment Authorized with Saved Card! ${res.message}${dashboardNotice}`);
+        setTimeout(() => {
+          if (res.packageId && onSuccess) {
+            onSuccess(res.packageId);
+          }
+          onClose();
+        }, 2000);
+      } else {
+        setErrorMsg(res.message);
+      }
       return;
     }
 
-    const realChargeId = stripeRes.stripeChargeId || '';
-    const dashboardNotice = ` • Reflected Live in Stripe Dashboard! (Charge ID: ${realChargeId})`;
-
-    // Save card to savedCards wallet if requested with vaulted Stripe customer link
-    if (saveCardForFuture) {
-      addSavedCard(client.id, {
-        cardHolder: cardHolder || client.fullName,
-        brand,
-        last4: last4Digits || '••••',
-        expiryMonth: expMonthToSave || '12',
-        expiryYear: expYearToSave || '2028',
-        isDefault: true,
-        stripeCustomerId: customerIdToVault,
-        stripeToken: cardToken,
-      });
+    // 2. Paying with New Card: 100% Stripe.js Protection
+    if (!stripeInstance || !cardElementInstance) {
+      setIsProcessing(false);
+      setErrorMsg('Stripe Secure Elements is still initializing. Please wait a moment.');
+      return;
     }
 
-    // Execute package purchase transaction in App Context with real charge ID, vaulted customer, and discount breakdown
-    const res = purchasePackage(
-      client.id,
-      packageDef.id,
-      'Stripe',
-      isRecurring,
-      { brand, last4: last4Digits || '••••' },
-      consentChecked,
-      realChargeId,
-      {
-        discountCode: appliedPromoCode,
-        discountAmountAED,
-        vatAmountAED,
-        totalAmountAED: totalPayableAED,
-      },
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      customerIdToVault
-    );
+    try {
+      const tokenResult = await stripeInstance.createToken(cardElementInstance, {
+        name: (cardHolder || client.fullName).trim(),
+      });
 
-    setIsProcessing(false);
-
-    if (res.success) {
-      if (appliedPromoCode && appliedPromoCode !== 'PACKAGE_DISCOUNT') {
-        incrementPromoCodeUsage(appliedPromoCode);
+      if (tokenResult.error) {
+        setIsProcessing(false);
+        setErrorMsg(`Card Error: ${tokenResult.error.message}`);
+        return;
       }
-      setSuccessMsg(`Payment Authorized! ${res.message}${dashboardNotice}`);
-      setTimeout(() => {
-        if (res.packageId && onSuccess) {
-          onSuccess(res.packageId);
+
+      if (!tokenResult.token) {
+        setIsProcessing(false);
+        setErrorMsg('Stripe tokenization failed. Please check your card details.');
+        return;
+      }
+
+      const cardToken = tokenResult.token.id;
+      const cardObj = tokenResult.token.card;
+      const brand = cardObj?.brand ? (cardObj.brand.charAt(0).toUpperCase() + cardObj.brand.slice(1)) : 'Visa';
+      const last4Digits = cardObj?.last4 || '••••';
+      const expMonthToSave = String(cardObj?.exp_month || '12');
+      const expYearToSave = String(cardObj?.exp_year || '2028');
+
+      // If client requested auto-pay or card saving, vault card to permanent Stripe Customer
+      let customerIdToVault = client.stripeCustomerId;
+      if (isSecKeyValid && cardToken && (saveCardForFuture || isRecurring)) {
+        try {
+          const custRes = await createStripeCustomer({
+            secretKey: activeSecretKey,
+            email: client.email,
+            name: client.fullName,
+            cardToken,
+            clientId: client.id,
+          });
+          if (custRes.success && custRes.customerId) {
+            customerIdToVault = custRes.customerId;
+          }
+        } catch (e) {
+          console.warn('Customer vaulting notice:', e);
         }
-        onClose();
-      }, 2000);
-    } else {
-      setErrorMsg(res.message);
+      }
+
+      const stripeRes = await processStripeApiCharge({
+        secretKey: activeSecretKey,
+        amountAED: totalPayableAED,
+        description: `${packageDef.name} for ${client.fullName} - Waiter Walk Dubai`,
+        statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
+        receiptEmail: client.email,
+        customerId: customerIdToVault || undefined,
+        cardToken: customerIdToVault ? undefined : cardToken,
+      });
+
+      if (!stripeRes.success) {
+        setIsProcessing(false);
+        setErrorMsg(`Stripe Gateway Error: ${stripeRes.message}`);
+        return;
+      }
+
+      const realChargeId = stripeRes.stripeChargeId || '';
+      const dashboardNotice = ` • Reflected Live in Stripe Dashboard! (Charge ID: ${realChargeId})`;
+
+      // Save card to savedCards wallet if requested with vaulted Stripe customer link
+      if (saveCardForFuture) {
+        addSavedCard(client.id, {
+          cardHolder: cardHolder || client.fullName,
+          brand,
+          last4: last4Digits,
+          expiryMonth: expMonthToSave,
+          expiryYear: expYearToSave,
+          isDefault: true,
+          stripeCustomerId: customerIdToVault,
+          stripeToken: cardToken,
+        });
+      }
+
+      // Execute package purchase transaction in App Context with real charge ID, vaulted customer, and discount breakdown
+      const res = purchasePackage(
+        client.id,
+        packageDef.id,
+        'Stripe',
+        isRecurring,
+        { brand, last4: last4Digits },
+        consentChecked,
+        realChargeId,
+        {
+          discountCode: appliedPromoCode,
+          discountAmountAED,
+          vatAmountAED,
+          totalAmountAED: totalPayableAED,
+        },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        customerIdToVault
+      );
+
+      setIsProcessing(false);
+
+      if (res.success) {
+        if (appliedPromoCode && appliedPromoCode !== 'PACKAGE_DISCOUNT') {
+          incrementPromoCodeUsage(appliedPromoCode);
+        }
+        setSuccessMsg(`Payment Authorized! ${res.message}${dashboardNotice}`);
+        setTimeout(() => {
+          if (res.packageId && onSuccess) {
+            onSuccess(res.packageId);
+          }
+          onClose();
+        }, 2000);
+      } else {
+        setErrorMsg(res.message);
+      }
+    } catch (err: any) {
+      setIsProcessing(false);
+      setErrorMsg(`Payment processing error: ${err?.message || 'Failed to process card details.'}`);
     }
   };
 
@@ -634,31 +656,138 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
             </div>
           )}
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Cardholder Name
-            </label>
-            <input
-              type="text"
-              required
-              value={cardHolder}
-              onChange={(e) => setCardHolder(e.target.value)}
-              className="w-full px-3 py-2.5 text-xs font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 bg-white"
-              placeholder="Full Name as shown on card"
-            />
-          </div>
+          {/* Payment Card Selection: Saved Cards vs New Card with Stripe.js */}
+          {clientSavedCards.length > 0 && (
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Select Payment Method
+              </label>
+              <div className="space-y-2">
+                {clientSavedCards.map((sc) => {
+                  const isSelected = selectedSavedCardId === sc.id;
+                  return (
+                    <div
+                      key={sc.id}
+                      onClick={() => {
+                        setSelectedSavedCardId(sc.id);
+                        setErrorMsg('');
+                      }}
+                      className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                        isSelected
+                          ? 'border-blue-600 bg-blue-50/80 ring-2 ring-blue-500/25 shadow-xs'
+                          : 'border-slate-200 bg-slate-50 hover:bg-slate-100/80'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <div
+                          className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                            isSelected ? 'border-blue-600 bg-blue-600' : 'border-slate-300 bg-white'
+                          }`}
+                        >
+                          {isSelected && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                        </div>
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <span className="font-extrabold text-slate-900 text-xs">{sc.brand}</span>
+                            <span className="font-mono text-xs text-slate-700 font-bold">•••• {sc.last4}</span>
+                            {sc.isDefault && (
+                              <span className="text-[10px] bg-emerald-100 text-emerald-800 font-extrabold px-1.5 py-0.5 rounded">
+                                DEFAULT
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            {sc.cardHolder} • Exp {sc.expiryMonth}/{sc.expiryYear}
+                          </div>
+                        </div>
+                      </div>
 
-          {/* Card Input Interface: Stripe Elements vs Manual Fields */}
-          {useStripeElements && activePublishableKey && (activePublishableKey.startsWith('pk_live_') || activePublishableKey.startsWith('pk_test_')) ? (
-            <div className="space-y-1.5">
+                      {isSelected && (
+                        <span className="text-[11px] font-bold text-blue-700 flex items-center space-x-1 shrink-0 bg-blue-100/70 px-2 py-0.5 rounded-md">
+                          <Check className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Selected</span>
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Option to use a new card */}
+                <div
+                  onClick={() => {
+                    setSelectedSavedCardId('NEW_CARD');
+                    setErrorMsg('');
+                  }}
+                  className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                    selectedSavedCardId === 'NEW_CARD'
+                      ? 'border-blue-600 bg-blue-50/80 ring-2 ring-blue-500/25 shadow-xs'
+                      : 'border-slate-200 bg-slate-50 hover:bg-slate-100/80'
+                  }`}
+                >
+                  <div className="flex items-center space-x-3">
+                    <div
+                      className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                        selectedSavedCardId === 'NEW_CARD' ? 'border-blue-600 bg-blue-600' : 'border-slate-300 bg-white'
+                      }`}
+                    >
+                      {selectedSavedCardId === 'NEW_CARD' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                    </div>
+                    <div className="flex items-center space-x-2 font-bold text-slate-900 text-xs">
+                      <CreditCard className="w-4 h-4 text-blue-600" />
+                      <span>Use a new credit or debit card</span>
+                    </div>
+                  </div>
+
+                  {selectedSavedCardId === 'NEW_CARD' && (
+                    <span className="text-[11px] font-bold text-blue-700 flex items-center space-x-1 shrink-0 bg-blue-100/70 px-2 py-0.5 rounded-md">
+                      <Check className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Selected</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* If a saved card is selected, show saved card confirmation notice */}
+          {selectedSavedCardId !== 'NEW_CARD' ? (
+            <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-2xl flex items-center justify-between text-xs text-blue-950 font-medium">
+              <div className="flex items-center space-x-2">
+                <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+                <span>
+                  Using saved <strong>{clientSavedCards.find((c) => c.id === selectedSavedCardId)?.brand}</strong> card ending in{' '}
+                  <strong className="font-mono">{clientSavedCards.find((c) => c.id === selectedSavedCardId)?.last4}</strong>. Payment will be processed directly with Stripe.
+                </span>
+              </div>
+              <span className="text-[10px] font-mono text-blue-700 bg-white px-2 py-0.5 rounded-md border border-blue-200 font-bold shrink-0 ml-2">
+                PCI Vaulted
+              </span>
+            </div>
+          ) : (
+            /* If entering a new card, strictly use Stripe.js Elements */
+            <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
               <div className="flex items-center justify-between">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Card Details (Stripe.js Protected)
+                  New Card Details (Stripe.js Protected)
                 </label>
                 <span className="text-[10px] text-emerald-800 bg-emerald-100/80 border border-emerald-300 px-2 py-0.5 rounded-full font-bold flex items-center space-x-1">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
                   <span>Stripe PCI Encrypted</span>
                 </span>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                  Cardholder Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={cardHolder}
+                  onChange={(e) => setCardHolder(e.target.value)}
+                  className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 bg-white"
+                  placeholder="Full Name as shown on card"
+                />
               </div>
 
               <div className="p-3 border border-slate-300 rounded-xl bg-white shadow-2xs focus-within:ring-2 focus-within:ring-blue-600 focus-within:border-blue-600 min-h-[46px]">
@@ -671,96 +800,9 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
                 )}
               </div>
 
-              <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
-                <span className="text-[10px] text-slate-400">Card tokenized directly by Stripe • Never touches server</span>
-                <button
-                  type="button"
-                  onClick={() => setUseStripeElements(false)}
-                  className="text-blue-600 hover:underline font-semibold text-[11px] cursor-pointer"
-                >
-                  Manual input mode
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                    Card Number
-                  </label>
-                  <div className="flex items-center space-x-2">
-                    {activePublishableKey && (activePublishableKey.startsWith('pk_live_') || activePublishableKey.startsWith('pk_test_')) && (
-                      <button
-                        type="button"
-                        onClick={() => setUseStripeElements(true)}
-                        className="text-xs text-blue-600 hover:underline font-bold cursor-pointer"
-                      >
-                        Use Stripe Elements
-                      </button>
-                    )}
-                    <span className="text-[11px] font-black text-blue-900 bg-blue-100 px-2 py-0.5 rounded-full border border-blue-200">
-                      {detectedBrand}
-                    </span>
-                  </div>
-                </div>
-                <div className="relative">
-                  <input
-                    type="text"
-                    required={!useStripeElements}
-                    value={cardNumber}
-                    onChange={handleCardNumberChange}
-                    placeholder="•••• •••• •••• ••••"
-                    className="w-full px-3.5 py-2.5 text-xs font-mono font-bold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 bg-white tracking-wider"
-                  />
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center space-x-1">
-                    <CreditCard className="w-4 h-4 text-slate-400" />
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Expiry (MM/YY)
-                  </label>
-                  <input
-                    type="text"
-                    required={!useStripeElements}
-                    value={expiry}
-                    onChange={handleExpiryChange}
-                    placeholder="MM/YY"
-                    maxLength={5}
-                    className="w-full px-3 py-2.5 text-xs font-mono font-bold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 text-center bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    CVC / CVV
-                  </label>
-                  <input
-                    type="password"
-                    required={!useStripeElements}
-                    maxLength={4}
-                    value={cvc}
-                    onChange={(e) => setCvc(e.target.value.replace(/\D/g, ''))}
-                    placeholder="CVC"
-                    className="w-full px-3 py-2.5 text-xs font-mono font-bold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 text-center bg-white"
-                  />
-                </div>
-              </div>
-
-              <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-[11px] leading-relaxed">
-                <span className="font-bold">Notice for Direct Entry:</span> If submitting raw card numbers directly, your Stripe Dashboard must have "Process payments unsafely" enabled at{' '}
-                <a
-                  href="https://dashboard.stripe.com/settings/integration"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline font-bold text-amber-950"
-                >
-                  dashboard.stripe.com/settings/integration
-                </a>
-                .
+              <div className="text-[10px] text-slate-500 flex items-center space-x-1">
+                <Lock className="w-3 h-3 text-slate-400" />
+                <span>Card data is tokenized directly inside Stripe's secure iframe.</span>
               </div>
             </div>
           )}
