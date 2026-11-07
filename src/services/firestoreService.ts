@@ -29,7 +29,15 @@ import {
 } from '../types';
 
 export function handleFirestoreError(error: unknown, operationContext: string) {
-  const err = error as { code?: string; message?: string };
+  const err = error as { code?: string; message?: string; name?: string };
+  if (
+    err?.name === 'AbortError' ||
+    err?.code === 'cancelled' ||
+    (typeof err?.message === 'string' && err.message.toLowerCase().includes('aborted'))
+  ) {
+    // Ignore benign stream aborts when unmounting or reconnecting
+    return;
+  }
   console.error(`Firestore error during [${operationContext}]:`, err?.message || error);
 }
 
