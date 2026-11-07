@@ -1,9 +1,17 @@
-/**
- * Real-Time Stripe API Gateway Integration Service
- * Communicates directly with Stripe REST API endpoints (https://api.stripe.com/v1)
- * to tokenize cards and authorize live charges in real time.
- * Transactions immediately reflect in the official Stripe Dashboard (dashboard.stripe.com).
- */
+import { loadStripe, Stripe } from '@stripe/stripe-js';
+
+let stripePromise: Promise<Stripe | null> | null = null;
+let lastPubKey = '';
+
+export function getStripe(publishableKey: string): Promise<Stripe | null> {
+  const cleanKey = publishableKey?.trim();
+  if (!cleanKey) return Promise.resolve(null);
+  if (!stripePromise || lastPubKey !== cleanKey) {
+    lastPubKey = cleanKey;
+    stripePromise = loadStripe(cleanKey);
+  }
+  return stripePromise;
+}
 
 export interface StripeCardDetails {
   number: string;
@@ -46,65 +54,16 @@ export async function processStripeApiCharge(req: StripeChargeRequest): Promise<
   // Convert AED amount to minor currency units (Fils: 1 AED = 100 Fils)
   const amountInFils = Math.round(req.amountAED * 100);
 
-  let sourceToken = req.cardToken?.trim() || '';
-
-  // 1. If card details are provided, tokenize card with Stripe in real time
-  if (req.card && req.card.number) {
-    try {
-      const cleanNumber = req.card.number.replace(/\s+/g, '');
-      const cleanMonth = req.card.expMonth.replace(/\D/g, '');
-      let cleanYear = req.card.expYear.replace(/\D/g, '');
-      if (cleanYear.length === 2) {
-        cleanYear = `20${cleanYear}`;
-      }
-      const cleanCvc = req.card.cvc.replace(/\D/g, '');
-
-      const tokenParams = new URLSearchParams();
-      tokenParams.append('card[number]', cleanNumber);
-      tokenParams.append('card[exp_month]', cleanMonth);
-      tokenParams.append('card[exp_year]', cleanYear);
-      tokenParams.append('card[cvc]', cleanCvc);
-      if (req.card.name) {
-        tokenParams.append('card[name]', req.card.name.trim());
-      }
-
-      const tokenResponse = await fetch('https://api.stripe.com/v1/tokens', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${secretKey}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: tokenParams.toString(),
-      });
-
-      const tokenData = await tokenResponse.json();
-
-      if (!tokenResponse.ok || tokenData.error) {
-        const errorMsg = tokenData.error?.message || 'Invalid credit card details.';
-        return {
-          success: false,
-          message: errorMsg,
-          rawError: tokenData.error,
-        };
-      }
-
-      sourceToken = tokenData.id;
-    } catch (tokenErr: any) {
-      return {
-        success: false,
-        message: `Stripe tokenization error: ${tokenErr?.message || 'Network request failed.'}`,
-      };
-    }
-  }
+  const sourceToken = req.cardToken?.trim() || '';
 
   if (!sourceToken) {
     return {
       success: false,
-      message: 'Payment verification failed: No valid card credentials or token received.',
+      message: 'PCI-DSS Compliance Error: Card must be securely tokenized via Stripe Elements (Stripe.js) before charging. Raw card numbers cannot be transmitted directly.',
     };
   }
 
-  // 2. Authorize and capture charge via Stripe API in real time
+  // Authorize and capture charge via Stripe API in real time using the secure token
   const chargeParams = new URLSearchParams();
   chargeParams.append('amount', amountInFils.toString());
   chargeParams.append('currency', 'aed');

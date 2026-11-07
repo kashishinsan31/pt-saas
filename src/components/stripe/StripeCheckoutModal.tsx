@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { PackageDefinition, Client } from '../../types';
 import { formatAED, calculateExpiryDate, formatDubaiDate } from '../../utils/dubaiTime';
-import { processStripeApiCharge } from '../../services/stripeApi';
+import { processStripeApiCharge, getStripe } from '../../services/stripeApi';
 import {
   CreditCard,
   ShieldCheck,
@@ -41,7 +41,12 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
   const liveKey = (settings.stripeLiveSecretKey || '').trim();
   const testKey = (settings.stripeSecretKey || '').trim();
   const activeSecretKey = isTestMode ? (testKey || liveKey) : (liveKey || testKey);
-  const hasConfiguredKeys = Boolean(
+
+  const livePubKey = (settings.stripeLivePublishableKey || settings.stripePublishableKey || '').trim();
+  const testPubKey = (settings.stripePublishableKey || settings.stripeLivePublishableKey || '').trim();
+  const activePublishableKey = isTestMode ? (testPubKey || livePubKey) : (livePubKey || testPubKey);
+
+  const isSecKeyValid = Boolean(
     activeSecretKey && (
       activeSecretKey.startsWith('sk_test_') ||
       activeSecretKey.startsWith('sk_live_') ||
@@ -49,9 +54,21 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
       activeSecretKey.startsWith('rk_live_')
     )
   );
-  const activePublishableKey = isTestMode
-    ? settings.stripePublishableKey || 'pk_test_51WaiterWalkDubaiKey998877'
-    : settings.stripeLivePublishableKey || settings.stripePublishableKey || 'pk_live_51WaiterWalkDubaiProductionKey998877';
+
+  const isPubKeyValid = Boolean(
+    activePublishableKey && (
+      activePublishableKey.startsWith('pk_test_') ||
+      activePublishableKey.startsWith('pk_live_')
+    )
+  );
+
+  const hasConfiguredKeys = isSecKeyValid && isPubKeyValid;
+
+  const stripeContainerRef = useRef<HTMLDivElement>(null);
+  const [stripeInstance, setStripeInstance] = useState<any>(null);
+  const [cardElementInstance, setCardElementInstance] = useState<any>(null);
+  const [useStripeElements, setUseStripeElements] = useState(true);
+  const [stripeCardReady, setStripeCardReady] = useState(false);
 
   const [cardNumber, setCardNumber] = useState('');
   const [expiry, setExpiry] = useState('');
@@ -66,6 +83,70 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+
+  // Initialize Stripe.js instance
+  useEffect(() => {
+    if (!isOpen || !activePublishableKey || (!activePublishableKey.startsWith('pk_live_') && !activePublishableKey.startsWith('pk_test_'))) {
+      return;
+    }
+
+    let isMounted = true;
+    getStripe(activePublishableKey).then((stripe) => {
+      if (!isMounted || !stripe) return;
+      setStripeInstance(stripe);
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, activePublishableKey]);
+
+  // Mount Stripe Elements card field
+  useEffect(() => {
+    if (!stripeInstance || !stripeContainerRef.current || !isOpen || !useStripeElements) return;
+
+    stripeContainerRef.current.innerHTML = '';
+    const elements = stripeInstance.elements();
+    const card = elements.create('card', {
+      style: {
+        base: {
+          fontSize: '14px',
+          color: '#0f172a',
+          fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          fontWeight: '500',
+          '::placeholder': {
+            color: '#94a3b8',
+          },
+        },
+        invalid: {
+          color: '#e11d48',
+          iconColor: '#e11d48',
+        },
+      },
+      hidePostalCode: true,
+    });
+
+    card.mount(stripeContainerRef.current);
+    card.on('ready', () => setStripeCardReady(true));
+    card.on('change', (event: any) => {
+      if (event.error) {
+        setErrorMsg(event.error.message);
+      } else {
+        setErrorMsg('');
+      }
+    });
+
+    setCardElementInstance(card);
+
+    return () => {
+      try {
+        card.destroy();
+      } catch (e) {
+        // ignore
+      }
+      setStripeCardReady(false);
+    };
+  }, [stripeInstance, isOpen, useStripeElements]);
 
   if (!isOpen) return null;
 
@@ -108,30 +189,6 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
     setErrorMsg('');
     setSuccessMsg('');
 
-    // Input Validation
-    const cleanCard = cardNumber.replace(/\s+/g, '');
-    if (cleanCard.length < 15) {
-      setErrorMsg('Invalid Card Number: Please enter a valid 15 or 16 digit credit/debit card number.');
-      return;
-    }
-
-    if (!expiry || !expiry.includes('/') || expiry.length < 5) {
-      setErrorMsg('Invalid Expiry Date: Please enter MM/YY (e.g., 12/28).');
-      return;
-    }
-
-    const [mmStr, yyStr] = expiry.split('/');
-    const mm = parseInt(mmStr, 10);
-    if (isNaN(mm) || mm < 1 || mm > 12) {
-      setErrorMsg('Invalid Expiry Month: Month must be between 01 and 12.');
-      return;
-    }
-
-    if (!cvc || cvc.length < 3) {
-      setErrorMsg('Invalid Security Code: CVC / CVV must be 3 or 4 digits.');
-      return;
-    }
-
     if (!termsAgreed) {
       setErrorMsg('Agreement Required: Please tick the box to accept the Payment Terms & Conditions and Refund Policy.');
       return;
@@ -142,14 +199,10 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
       return;
     }
 
-    setIsProcessing(true);
-
     const liveKey = (settings.stripeLiveSecretKey || '').trim();
     const testKey = (settings.stripeSecretKey || '').trim();
     const activeSecretKey = isTestMode ? (testKey || liveKey) : (liveKey || testKey);
 
-    let realChargeId = '';
-    let dashboardNotice = '';
     const isValidKeyFormat = activeSecretKey && (
       activeSecretKey.startsWith('sk_test_') ||
       activeSecretKey.startsWith('sk_live_') ||
@@ -164,20 +217,94 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
       return;
     }
 
-    const [expM, expY] = expiry.split('/');
+    setIsProcessing(true);
+
+    let cardToken = '';
+    let brand = detectedBrand;
+    let last4Digits = '';
+    let expMonthToSave = '';
+    let expYearToSave = '';
+
+    // If using Stripe Elements, tokenize securely via Stripe.js
+    if (useStripeElements && stripeInstance && cardElementInstance) {
+      try {
+        const tokenResult = await stripeInstance.createToken(cardElementInstance, {
+          name: (cardHolder || client.fullName).trim(),
+        });
+
+        if (tokenResult.error) {
+          setIsProcessing(false);
+          setErrorMsg(`Card Error: ${tokenResult.error.message}`);
+          return;
+        }
+
+        if (tokenResult.token) {
+          cardToken = tokenResult.token.id;
+          const cardObj = tokenResult.token.card;
+          if (cardObj) {
+            brand = cardObj.brand ? (cardObj.brand.charAt(0).toUpperCase() + cardObj.brand.slice(1)) : 'Visa';
+            last4Digits = cardObj.last4 || '••••';
+            expMonthToSave = String(cardObj.exp_month || '12');
+            expYearToSave = String(cardObj.exp_year || '2028');
+          }
+        }
+      } catch (err: any) {
+        setIsProcessing(false);
+        setErrorMsg(`Stripe tokenization error: ${err?.message || 'Failed to process card details.'}`);
+        return;
+      }
+    } else {
+      // Manual input validation
+      const cleanCard = cardNumber.replace(/\s+/g, '');
+      if (cleanCard.length < 15) {
+        setIsProcessing(false);
+        setErrorMsg('Invalid Card Number: Please enter a valid 15 or 16 digit credit/debit card number.');
+        return;
+      }
+
+      if (!expiry || !expiry.includes('/') || expiry.length < 5) {
+        setIsProcessing(false);
+        setErrorMsg('Invalid Expiry Date: Please enter MM/YY (e.g., 12/28).');
+        return;
+      }
+
+      const [mmStr, yyStr] = expiry.split('/');
+      const mm = parseInt(mmStr, 10);
+      if (isNaN(mm) || mm < 1 || mm > 12) {
+        setIsProcessing(false);
+        setErrorMsg('Invalid Expiry Month: Month must be between 01 and 12.');
+        return;
+      }
+
+      if (!cvc || cvc.length < 3) {
+        setIsProcessing(false);
+        setErrorMsg('Invalid Security Code: CVC / CVV must be 3 or 4 digits.');
+        return;
+      }
+
+      brand = detectedBrand;
+      last4Digits = cleanCard.length >= 4 ? cleanCard.slice(-4) : '••••';
+      expMonthToSave = mmStr;
+      expYearToSave = yyStr.length === 2 ? `20${yyStr}` : yyStr;
+    }
+
+    const cleanCard = cardNumber.replace(/\s+/g, '');
+    const [expM, expY] = expiry.includes('/') ? expiry.split('/') : ['12', '28'];
+
     const stripeRes = await processStripeApiCharge({
       secretKey: activeSecretKey,
       amountAED: totalPayableAED,
       description: `${packageDef.name} for ${client.fullName} - Waiter Walk Dubai`,
       statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
       receiptEmail: client.email,
-      card: {
+      cardToken: cardToken || undefined,
+      card: !cardToken ? {
         number: cleanCard,
         expMonth: expM,
         expYear: expY,
         cvc: cvc.trim(),
         name: (cardHolder || client.fullName).trim(),
-      },
+      } : undefined,
     });
 
     if (!stripeRes.success) {
@@ -186,19 +313,17 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
       return;
     }
 
-    realChargeId = stripeRes.stripeChargeId || '';
-    dashboardNotice = ` • Reflected Live in Stripe Dashboard! (Charge ID: ${realChargeId})`;
-
-    const last4 = cleanCard.length >= 4 ? cleanCard.slice(-4) : '••••';
+    const realChargeId = stripeRes.stripeChargeId || '';
+    const dashboardNotice = ` • Reflected Live in Stripe Dashboard! (Charge ID: ${realChargeId})`;
 
     // Save card to savedCards wallet if requested
     if (saveCardForFuture) {
       addSavedCard(client.id, {
         cardHolder: cardHolder || client.fullName,
-        brand: detectedBrand,
-        last4,
-        expiryMonth: expM || '12',
-        expiryYear: expY ? (expY.length === 2 ? `20${expY}` : expY) : '2028',
+        brand,
+        last4: last4Digits || '••••',
+        expiryMonth: expMonthToSave || '12',
+        expiryYear: expYearToSave || '2028',
         isDefault: true,
       });
     }
@@ -209,7 +334,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
       packageDef.id,
       'Stripe',
       isRecurring,
-      { brand: detectedBrand, last4 },
+      { brand, last4: last4Digits || '••••' },
       consentChecked,
       realChargeId,
       {
@@ -330,7 +455,12 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
                 Stripe Gateway Not Configured ({isTestMode ? 'Test Sandbox Mode' : 'Live Production Mode'})
               </span>
               <p className="text-[11px] text-amber-800 leading-relaxed">
-                No Stripe Secret Key (<code>{isTestMode ? 'sk_test_...' : 'sk_live_...'}</code>) is configured in System Settings. Real-time payments are blocked until your Stripe API keys are configured in <strong>Admin Panel &gt; System Settings &gt; Stripe Payment Gateway</strong>.
+                {!isPubKeyValid && !isSecKeyValid
+                  ? 'Both your Stripe Publishable Key (pk_...) and Secret Key (sk_...) are required.'
+                  : !isPubKeyValid
+                  ? 'Your Stripe Publishable Key (pk_...) is required to initialize Stripe Elements.'
+                  : 'Your Stripe Secret Key (sk_...) is required to authorize transactions.'}
+                {' '}Please configure in <strong>Admin Panel &gt; System Settings &gt; Stripe Payment Gateway</strong>.
               </p>
             </div>
           </div>
@@ -491,60 +621,122 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
             />
           </div>
 
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Card Number
-              </label>
-              <span className="text-[11px] font-black text-blue-900 bg-blue-100 px-2 py-0.5 rounded-full border border-blue-200">
-                {detectedBrand}
-              </span>
-            </div>
-            <div className="relative">
-              <input
-                type="text"
-                required
-                value={cardNumber}
-                onChange={handleCardNumberChange}
-                placeholder="•••• •••• •••• ••••"
-                className="w-full px-3.5 py-2.5 text-xs font-mono font-bold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 bg-white tracking-wider"
-              />
-              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center space-x-1">
-                <CreditCard className="w-4 h-4 text-slate-400" />
+          {/* Card Input Interface: Stripe Elements vs Manual Fields */}
+          {useStripeElements && activePublishableKey && (activePublishableKey.startsWith('pk_live_') || activePublishableKey.startsWith('pk_test_')) ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Card Details (Stripe.js Protected)
+                </label>
+                <span className="text-[10px] text-emerald-800 bg-emerald-100/80 border border-emerald-300 px-2 py-0.5 rounded-full font-bold flex items-center space-x-1">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Stripe PCI Encrypted</span>
+                </span>
+              </div>
+
+              <div className="p-3 border border-slate-300 rounded-xl bg-white shadow-2xs focus-within:ring-2 focus-within:ring-blue-600 focus-within:border-blue-600 min-h-[46px]">
+                <div ref={stripeContainerRef} id="stripe-card-element" className="w-full" />
+                {!stripeCardReady && (
+                  <div className="text-slate-400 text-xs py-1 flex items-center space-x-2">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                    <span>Connecting to Stripe Secure Elements...</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+                <span className="text-[10px] text-slate-400">Card tokenized directly by Stripe • Never touches server</span>
+                <button
+                  type="button"
+                  onClick={() => setUseStripeElements(false)}
+                  className="text-blue-600 hover:underline font-semibold text-[11px] cursor-pointer"
+                >
+                  Manual input mode
+                </button>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="space-y-3">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Card Number
+                  </label>
+                  <div className="flex items-center space-x-2">
+                    {activePublishableKey && (activePublishableKey.startsWith('pk_live_') || activePublishableKey.startsWith('pk_test_')) && (
+                      <button
+                        type="button"
+                        onClick={() => setUseStripeElements(true)}
+                        className="text-xs text-blue-600 hover:underline font-bold cursor-pointer"
+                      >
+                        Use Stripe Elements
+                      </button>
+                    )}
+                    <span className="text-[11px] font-black text-blue-900 bg-blue-100 px-2 py-0.5 rounded-full border border-blue-200">
+                      {detectedBrand}
+                    </span>
+                  </div>
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    required={!useStripeElements}
+                    value={cardNumber}
+                    onChange={handleCardNumberChange}
+                    placeholder="•••• •••• •••• ••••"
+                    className="w-full px-3.5 py-2.5 text-xs font-mono font-bold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 bg-white tracking-wider"
+                  />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center space-x-1">
+                    <CreditCard className="w-4 h-4 text-slate-400" />
+                  </div>
+                </div>
+              </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Expiry (MM/YY)
-              </label>
-              <input
-                type="text"
-                required
-                value={expiry}
-                onChange={handleExpiryChange}
-                placeholder="MM/YY"
-                maxLength={5}
-                className="w-full px-3 py-2.5 text-xs font-mono font-bold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 text-center bg-white"
-              />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Expiry (MM/YY)
+                  </label>
+                  <input
+                    type="text"
+                    required={!useStripeElements}
+                    value={expiry}
+                    onChange={handleExpiryChange}
+                    placeholder="MM/YY"
+                    maxLength={5}
+                    className="w-full px-3 py-2.5 text-xs font-mono font-bold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 text-center bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    CVC / CVV
+                  </label>
+                  <input
+                    type="password"
+                    required={!useStripeElements}
+                    maxLength={4}
+                    value={cvc}
+                    onChange={(e) => setCvc(e.target.value.replace(/\D/g, ''))}
+                    placeholder="CVC"
+                    className="w-full px-3 py-2.5 text-xs font-mono font-bold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 text-center bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-[11px] leading-relaxed">
+                <span className="font-bold">Notice for Direct Entry:</span> If submitting raw card numbers directly, your Stripe Dashboard must have "Process payments unsafely" enabled at{' '}
+                <a
+                  href="https://dashboard.stripe.com/settings/integration"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline font-bold text-amber-950"
+                >
+                  dashboard.stripe.com/settings/integration
+                </a>
+                .
+              </div>
             </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                CVC / CVV
-              </label>
-              <input
-                type="password"
-                required
-                maxLength={4}
-                value={cvc}
-                onChange={(e) => setCvc(e.target.value.replace(/\D/g, ''))}
-                placeholder="CVC"
-                className="w-full px-3 py-2.5 text-xs font-mono font-bold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 text-center bg-white"
-              />
-            </div>
-          </div>
+          )}
 
           <label className="flex items-center space-x-2 cursor-pointer text-xs font-semibold text-slate-700 select-none">
             <input

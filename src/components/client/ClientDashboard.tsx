@@ -32,7 +32,7 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { StripeCheckoutModal } from '../stripe/StripeCheckoutModal';
-import { processStripeApiCharge } from '../../services/stripeApi';
+import { processStripeApiCharge, getStripe } from '../../services/stripeApi';
 import { DashboardSlider } from '../common/DashboardSlider';
 import { HealthDeclarationModal } from '../common/HealthDeclarationModal';
 import { AddHealthIssueModal } from '../common/AddHealthIssueModal';
@@ -105,6 +105,77 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
   const [payFeedbackMsg, setPayFeedbackMsg] = useState('');
   const [isProcessingPay, setIsProcessingPay] = useState(false);
 
+  const pendingStripeRef = React.useRef<HTMLDivElement>(null);
+  const [pendingStripeInstance, setPendingStripeInstance] = useState<any>(null);
+  const [pendingCardElement, setPendingCardElement] = useState<any>(null);
+  const [usePendingStripeElements, setUsePendingStripeElements] = useState(true);
+  const [pendingCardReady, setPendingCardReady] = useState(false);
+
+  const isTestMode = settings.stripeMode === 'test';
+  const livePubKey = (settings.stripeLivePublishableKey || settings.stripePublishableKey || '').trim();
+  const testPubKey = (settings.stripePublishableKey || settings.stripeLivePublishableKey || '').trim();
+  const activePubKey = isTestMode ? (testPubKey || livePubKey) : (livePubKey || testPubKey);
+
+  useEffect(() => {
+    if (!isPayPendingModalOpen || !activePubKey || (!activePubKey.startsWith('pk_live_') && !activePubKey.startsWith('pk_test_'))) {
+      return;
+    }
+    let isMounted = true;
+    getStripe(activePubKey).then((stripe) => {
+      if (!isMounted || !stripe) return;
+      setPendingStripeInstance(stripe);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [isPayPendingModalOpen, activePubKey]);
+
+  useEffect(() => {
+    if (!pendingStripeInstance || !pendingStripeRef.current || !isPayPendingModalOpen || !usePendingStripeElements) return;
+
+    pendingStripeRef.current.innerHTML = '';
+    const elements = pendingStripeInstance.elements();
+    const card = elements.create('card', {
+      style: {
+        base: {
+          fontSize: '14px',
+          color: '#0f172a',
+          fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          fontWeight: '500',
+          '::placeholder': {
+            color: '#94a3b8',
+          },
+        },
+        invalid: {
+          color: '#e11d48',
+          iconColor: '#e11d48',
+        },
+      },
+      hidePostalCode: true,
+    });
+
+    card.mount(pendingStripeRef.current);
+    card.on('ready', () => setPendingCardReady(true));
+    card.on('change', (event: any) => {
+      if (event.error) {
+        setPayFeedbackMsg(`Card Error: ${event.error.message}`);
+      } else {
+        setPayFeedbackMsg('');
+      }
+    });
+
+    setPendingCardElement(card);
+
+    return () => {
+      try {
+        card.destroy();
+      } catch (e) {
+        // ignore
+      }
+      setPendingCardReady(false);
+    };
+  }, [pendingStripeInstance, isPayPendingModalOpen, usePendingStripeElements]);
+
   const handlePayAndActivate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPendingPkg) return;
@@ -113,23 +184,6 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
       return;
     }
 
-    const cleanPayCard = payCardNumber.replace(/\s+/g, '');
-    if (cleanPayCard.length < 15) {
-      setPayFeedbackMsg('Error: Please enter a valid 15 or 16 digit card number.');
-      return;
-    }
-
-    if (!payExpiryMonth || !payExpiryYear) {
-      setPayFeedbackMsg('Error: Please enter card expiration month and year.');
-      return;
-    }
-
-    if (!payCvc || payCvc.length < 3) {
-      setPayFeedbackMsg('Error: Please enter a valid 3 or 4 digit CVC security code.');
-      return;
-    }
-
-    const isTestMode = settings.stripeMode === 'test';
     const liveKey = (settings.stripeLiveSecretKey || '').trim();
     const testKey = (settings.stripeSecretKey || '').trim();
     const activeSecretKey = isTestMode ? (testKey || liveKey) : (liveKey || testKey);
@@ -151,9 +205,66 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
     setIsProcessingPay(true);
     setPayFeedbackMsg('');
 
+    let cardToken = '';
+    let brand = payBrand;
+    let last4Digits = '';
+    let expM = payExpiryMonth;
+    let expY = payExpiryYear;
+
+    if (usePendingStripeElements && pendingStripeInstance && pendingCardElement) {
+      try {
+        const tokenResult = await pendingStripeInstance.createToken(pendingCardElement, {
+          name: (payCardHolder || client.fullName).trim(),
+        });
+
+        if (tokenResult.error) {
+          setIsProcessingPay(false);
+          setPayFeedbackMsg(`Card Error: ${tokenResult.error.message}`);
+          return;
+        }
+
+        if (tokenResult.token) {
+          cardToken = tokenResult.token.id;
+          const c = tokenResult.token.card;
+          if (c) {
+            brand = c.brand ? (c.brand.charAt(0).toUpperCase() + c.brand.slice(1)) : 'Visa';
+            last4Digits = c.last4 || '••••';
+            expM = String(c.exp_month || '12');
+            expY = String(c.exp_year || '2028');
+          }
+        }
+      } catch (err: any) {
+        setIsProcessingPay(false);
+        setPayFeedbackMsg(`Stripe tokenization error: ${err?.message || 'Failed to process card details.'}`);
+        return;
+      }
+    } else {
+      const cleanPayCard = payCardNumber.replace(/\s+/g, '');
+      if (cleanPayCard.length < 15) {
+        setIsProcessingPay(false);
+        setPayFeedbackMsg('Error: Please enter a valid 15 or 16 digit card number.');
+        return;
+      }
+
+      if (!payExpiryMonth || !payExpiryYear) {
+        setIsProcessingPay(false);
+        setPayFeedbackMsg('Error: Please enter card expiration month and year.');
+        return;
+      }
+
+      if (!payCvc || payCvc.length < 3) {
+        setIsProcessingPay(false);
+        setPayFeedbackMsg('Error: Please enter a valid 3 or 4 digit CVC security code.');
+        return;
+      }
+
+      last4Digits = cleanPayCard.length >= 4 ? cleanPayCard.slice(-4) : '••••';
+    }
+
     try {
       const pkgDef = packageDefinitions.find((p) => p.id === selectedPendingPkg.packageDefinitionId);
       const pkgAmountAED = selectedPendingPkg.priceAED || pkgDef?.priceAED || 3500;
+      const cleanPayCard = payCardNumber.replace(/\s+/g, '');
 
       // Communicate in real-time with Stripe Gateway to tokenize card and charge
       const stripeRes = await processStripeApiCharge({
@@ -162,13 +273,14 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
         description: `Pending Package Payment: ${selectedPendingPkg.name || pkgDef?.name || 'PT Package'} for ${client.fullName} - Waiter Walk Dubai`,
         statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
         receiptEmail: client.email,
-        card: {
+        cardToken: cardToken || undefined,
+        card: !cardToken ? {
           number: cleanPayCard,
           expMonth: payExpiryMonth,
           expYear: payExpiryYear,
           cvc: payCvc.trim(),
           name: (payCardHolder || client.fullName).trim(),
-        },
+        } : undefined,
       });
 
       if (!stripeRes.success) {
@@ -177,15 +289,14 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
         return;
       }
 
-      const last4 = cleanPayCard.length >= 4 ? cleanPayCard.slice(-4) : '••••';
       const res = payAndActivatePackage(
         selectedPendingPkg.id,
         {
           cardHolder: payCardHolder,
-          brand: payBrand,
-          last4,
-          expiryMonth: payExpiryMonth,
-          expiryYear: payExpiryYear,
+          brand,
+          last4: last4Digits || '••••',
+          expiryMonth: expM || '12',
+          expiryYear: expY || '2028',
           isDefault: paySaveDefaultCard,
         },
         stripeRes.stripeChargeId
@@ -1771,66 +1882,140 @@ Personal training session packages are personal and non-transferable. Package re
                   </div>
                 )}
 
-                <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Cardholder Name</label>
-                    <input
-                      type="text"
-                      required
-                      value={payCardHolder}
-                      onChange={(e) => setPayCardHolder(e.target.value)}
-                      className="w-full p-2 border border-slate-300 rounded-lg text-xs bg-white"
-                      placeholder="Name on card"
-                    />
-                  </div>
+                {usePendingStripeElements && activePubKey && (activePubKey.startsWith('pk_live_') || activePubKey.startsWith('pk_test_')) ? (
+                  <div className="space-y-2 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase">
+                        Card Details (Stripe.js Protected)
+                      </label>
+                      <span className="text-[10px] text-emerald-800 bg-emerald-100/80 border border-emerald-300 px-2 py-0.5 rounded-full font-bold flex items-center space-x-1">
+                        <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                        <span>PCI Encrypted</span>
+                      </span>
+                    </div>
 
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Card Number</label>
-                    <input
-                      type="text"
-                      required
-                      value={payCardNumber}
-                      onChange={(e) => setPayCardNumber(e.target.value)}
-                      className="w-full p-2 border border-slate-300 rounded-lg text-xs font-mono bg-white"
-                      placeholder="•••• •••• •••• ••••"
-                    />
-                  </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Cardholder Name</label>
+                      <input
+                        type="text"
+                        required
+                        value={payCardHolder}
+                        onChange={(e) => setPayCardHolder(e.target.value)}
+                        className="w-full p-2 border border-slate-300 rounded-lg text-xs bg-white font-semibold"
+                        placeholder="Name on card"
+                      />
+                    </div>
 
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Exp Month</label>
-                      <input
-                        type="text"
-                        required
-                        value={payExpiryMonth}
-                        onChange={(e) => setPayExpiryMonth(e.target.value)}
-                        className="w-full p-2 border border-slate-300 rounded-lg text-xs text-center bg-white"
-                        placeholder="MM"
-                      />
+                    <div className="p-3 border border-slate-300 rounded-xl bg-white shadow-2xs focus-within:ring-2 focus-within:ring-blue-600 focus-within:border-blue-600 min-h-[46px]">
+                      <div ref={pendingStripeRef} id="pending-stripe-card-element" className="w-full" />
+                      {!pendingCardReady && (
+                        <div className="text-slate-400 text-xs py-1 flex items-center space-x-2">
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                          <span>Connecting to Stripe Secure Elements...</span>
+                        </div>
+                      )}
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Exp Year</label>
-                      <input
-                        type="text"
-                        required
-                        value={payExpiryYear}
-                        onChange={(e) => setPayExpiryYear(e.target.value)}
-                        className="w-full p-2 border border-slate-300 rounded-lg text-xs text-center bg-white"
-                        placeholder="YYYY"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">CVC</label>
-                      <input
-                        type="text"
-                        required
-                        value={payCvc}
-                        onChange={(e) => setPayCvc(e.target.value)}
-                        className="w-full p-2 border border-slate-300 rounded-lg text-xs text-center font-mono bg-white"
-                        placeholder="CVC"
-                      />
+
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1">
+                      <span>Card tokenized directly by Stripe</span>
+                      <button
+                        type="button"
+                        onClick={() => setUsePendingStripeElements(false)}
+                        className="text-blue-600 hover:underline font-semibold cursor-pointer"
+                      >
+                        Manual input mode
+                      </button>
                     </div>
                   </div>
+                ) : (
+                  <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase">Card Details</label>
+                      {activePubKey && (activePubKey.startsWith('pk_live_') || activePubKey.startsWith('pk_test_')) && (
+                        <button
+                          type="button"
+                          onClick={() => setUsePendingStripeElements(true)}
+                          className="text-xs text-blue-600 hover:underline font-bold cursor-pointer"
+                        >
+                          Use Stripe Elements
+                        </button>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Cardholder Name</label>
+                      <input
+                        type="text"
+                        required={!usePendingStripeElements}
+                        value={payCardHolder}
+                        onChange={(e) => setPayCardHolder(e.target.value)}
+                        className="w-full p-2 border border-slate-300 rounded-lg text-xs bg-white"
+                        placeholder="Name on card"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Card Number</label>
+                      <input
+                        type="text"
+                        required={!usePendingStripeElements}
+                        value={payCardNumber}
+                        onChange={(e) => setPayCardNumber(e.target.value)}
+                        className="w-full p-2 border border-slate-300 rounded-lg text-xs font-mono bg-white"
+                        placeholder="•••• •••• •••• ••••"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Exp Month</label>
+                        <input
+                          type="text"
+                          required={!usePendingStripeElements}
+                          value={payExpiryMonth}
+                          onChange={(e) => setPayExpiryMonth(e.target.value)}
+                          className="w-full p-2 border border-slate-300 rounded-lg text-xs text-center bg-white"
+                          placeholder="MM"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Exp Year</label>
+                        <input
+                          type="text"
+                          required={!usePendingStripeElements}
+                          value={payExpiryYear}
+                          onChange={(e) => setPayExpiryYear(e.target.value)}
+                          className="w-full p-2 border border-slate-300 rounded-lg text-xs text-center bg-white"
+                          placeholder="YYYY"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">CVC</label>
+                        <input
+                          type="text"
+                          required={!usePendingStripeElements}
+                          value={payCvc}
+                          onChange={(e) => setPayCvc(e.target.value)}
+                          className="w-full p-2 border border-slate-300 rounded-lg text-xs text-center font-mono bg-white"
+                          placeholder="CVC"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-[11px] leading-relaxed">
+                      <span className="font-bold">Notice for Direct Entry:</span> If submitting raw card numbers directly, your Stripe Dashboard must have "Process payments unsafely" enabled at{' '}
+                      <a
+                        href="https://dashboard.stripe.com/settings/integration"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline font-bold text-amber-950"
+                      >
+                        dashboard.stripe.com/settings/integration
+                      </a>
+                      .
+                    </div>
+                  </div>
+                )}
 
                   <label className="flex items-center space-x-2 pt-1 cursor-pointer">
                     <input
@@ -1844,7 +2029,6 @@ Personal training session packages are personal and non-transferable. Package re
                     </span>
                   </label>
                 </div>
-              </div>
 
               {/* Payment Terms & Conditions and Refund Policy Display */}
               <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50">
