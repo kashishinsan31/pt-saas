@@ -101,7 +101,8 @@ interface AppContextType {
     customPriceAED?: number,
     customValidityDays?: number,
     customPackageName?: string,
-    customSessionCount?: number
+    customSessionCount?: number,
+    stripeCustomerId?: string
   ) => { success: boolean; message: string; packageId?: string };
 
   createDuePackage: (
@@ -630,13 +631,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     if (isValidKeyFormat && client) {
+      const customerId = defaultCard?.stripeCustomerId || client?.stripeCustomerId || clientSub?.stripeCustomerId;
       const stripeRes = await processStripeApiCharge({
         secretKey: activeSecretKey,
         amountAED: targetAmountAED,
         description: `Auto-Pay Recurring Renewal: ${targetPackageName} for ${client.fullName} (AED ${targetAmountAED}) - Waiter Walk Dubai`,
         statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
         receiptEmail: client.email,
-        cardToken: 'tok_visa',
+        customerId: customerId || undefined,
+        cardToken: !customerId ? (isLive ? undefined : 'tok_visa') : undefined,
       });
 
       if (stripeRes.success && stripeRes.stripeChargeId) {
@@ -698,7 +701,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       targetAmountAED,
       targetValidityDays,
       targetPackageName,
-      targetSessionCount
+      targetSessionCount,
+      defaultCard.stripeCustomerId || client?.stripeCustomerId || clientSub?.stripeCustomerId
     );
 
     if (res.success) {
@@ -772,8 +776,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             },
             ...prev,
           ]);
+
+          // Post notification to Client
+          const clientUser = users.find(
+            (u) => u.associatedId === sub.clientId || (client && u.email.toLowerCase() === client.email.toLowerCase())
+          );
+          if (clientUser) {
+            setNotifications((prev) => [
+              {
+                id: `NOTIF-CLIENT-AUTO-${sub.id}-${Date.now()}`,
+                userId: clientUser.id,
+                title: `💳 Package Auto-Pay Renewed`,
+                message: `Your package "${sub.packageName}" was automatically renewed for AED ${sub.amountAED} via your saved card (${defaultCard.brand} ending in ${defaultCard.last4}). Fresh training sessions have been added to your wallet!`,
+                type: 'payment',
+                read: false,
+                timestamp: new Date().toISOString(),
+              },
+              ...prev,
+            ]);
+          }
         } else {
           details.push(`⚠️ Auto-Pay Attempt for ${client.fullName}: ${res.message}`);
+          const clientUser = users.find(
+            (u) => u.associatedId === sub.clientId || (client && u.email.toLowerCase() === client.email.toLowerCase())
+          );
+          if (clientUser) {
+            setNotifications((prev) => [
+              {
+                id: `NOTIF-CLIENT-FAIL-${sub.id}-${Date.now()}`,
+                userId: clientUser.id,
+                title: `⚠️ Auto-Pay Deduction Failed`,
+                message: `Automatic renewal for "${sub.packageName}" could not be processed: ${res.message}. Please verify your card details in the Client Portal.`,
+                type: 'payment',
+                read: false,
+                timestamp: new Date().toISOString(),
+              },
+              ...prev,
+            ]);
+          }
         }
       } else {
         details.push(`⏸️ ${client.fullName}: Package active until ${clientActivePkg?.expiryDate} (${clientActivePkg?.remainingSessions} sessions left). Auto-pay held until expiry.`);
@@ -1038,7 +1078,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     customPriceAED?: number,
     customValidityDays?: number,
     customPackageName?: string,
-    customSessionCount?: number
+    customSessionCount?: number,
+    stripeCustomerId?: string
   ) => {
     const pkgDef = packageDefinitions.find((p) => p.id === packageDefId);
     const client = clients.find((c) => c.id === clientId);
@@ -1095,6 +1136,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Create subscription record if recurring (Strictly 1 Active Subscription per Client Account)
     if (isRecurring && subRef) {
+      const defaultSavedCard = savedCards.find((c) => c.clientId === clientId && c.isDefault) || savedCards.find((c) => c.clientId === clientId);
+      const effectiveCustomerId = stripeCustomerId || client.stripeCustomerId || defaultSavedCard?.stripeCustomerId || `cus_${clientId}`;
+
       setSubscriptions((prev) => {
         // Cancel all existing active/pending subscriptions for this specific client
         const updated = prev.map((s) => (s.clientId === clientId && (s.status === 'Active' || s.status === 'Pending') ? { ...s, status: 'Cancelled' as const } : s));
@@ -1111,7 +1155,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           nextPaymentDate: expiryDate,
           lastPaymentDate: startDate,
           status: 'Active',
-          stripeCustomerId: `cus_${clientId}`,
+          stripeCustomerId: effectiveCustomerId,
           stripeSubscriptionId: `sub_stripe_${Date.now()}`,
           authorizationConsentGiven: true,
           createdAt: new Date().toISOString(),
@@ -1119,6 +1163,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         return [newSub, ...updated];
       });
+
+      if (effectiveCustomerId && (!client.stripeCustomerId || client.stripeCustomerId !== effectiveCustomerId)) {
+        setClients((prev) => prev.map((c) => (c.id === clientId ? { ...c, stripeCustomerId: effectiveCustomerId } : c)));
+      }
     }
 
     // Allocate EXACTLY the purchased session count
@@ -1334,6 +1382,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return p;
       })
     );
+
+    // Create or update subscription record for automatic 30-day auto-pay deductions
+    if (cardDetails.isDefault ?? true) {
+      setSubscriptions((prev) => {
+        const otherSubs = prev.filter((s) => s.clientId !== client.id);
+        const newSub: SubscriptionRecord = {
+          id: `SUB-${Math.floor(4000 + Math.random() * 9000)}`,
+          clientId: client.id,
+          packageDefinitionId: pkg.packageDefinitionId,
+          packageName: pkg.packageName,
+          amountAED: pkg.packagePriceAED,
+          cardBrand: cardDetails.brand || 'Visa',
+          last4Digits: cardDetails.last4 || '••••',
+          startDate,
+          nextPaymentDate: expiryDate,
+          lastPaymentDate: startDate,
+          status: 'Active',
+          stripeCustomerId: client.stripeCustomerId || `cus_${client.id}`,
+          stripeSubscriptionId: `sub_stripe_${Date.now()}`,
+          authorizationConsentGiven: true,
+          createdAt: new Date().toISOString(),
+        };
+        return [newSub, ...otherSubs];
+      });
+    }
 
     // Add Session Transaction Ledger
     const newTxn: SessionTransaction = {

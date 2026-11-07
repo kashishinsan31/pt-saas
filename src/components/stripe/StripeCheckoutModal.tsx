@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { PackageDefinition, Client } from '../../types';
 import { formatAED, calculateExpiryDate, formatDubaiDate } from '../../utils/dubaiTime';
-import { processStripeApiCharge, getStripe } from '../../services/stripeApi';
+import { processStripeApiCharge, getStripe, createStripeCustomer } from '../../services/stripeApi';
 import {
   CreditCard,
   ShieldCheck,
@@ -291,14 +291,34 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
     const cleanCard = cardNumber.replace(/\s+/g, '');
     const [expM, expY] = expiry.includes('/') ? expiry.split('/') : ['12', '28'];
 
+    // If client requested auto-pay or card saving, vault card to permanent Stripe Customer
+    let customerIdToVault = client.stripeCustomerId;
+    if (isSecKeyValid && cardToken && (saveCardForFuture || isRecurring)) {
+      try {
+        const custRes = await createStripeCustomer({
+          secretKey: activeSecretKey,
+          email: client.email,
+          name: client.fullName,
+          cardToken,
+          clientId: client.id,
+        });
+        if (custRes.success && custRes.customerId) {
+          customerIdToVault = custRes.customerId;
+        }
+      } catch (e) {
+        console.warn('Customer vaulting notice:', e);
+      }
+    }
+
     const stripeRes = await processStripeApiCharge({
       secretKey: activeSecretKey,
       amountAED: totalPayableAED,
       description: `${packageDef.name} for ${client.fullName} - Waiter Walk Dubai`,
       statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
       receiptEmail: client.email,
-      cardToken: cardToken || undefined,
-      card: !cardToken ? {
+      customerId: customerIdToVault || undefined,
+      cardToken: customerIdToVault ? undefined : (cardToken || undefined),
+      card: !cardToken && !customerIdToVault ? {
         number: cleanCard,
         expMonth: expM,
         expYear: expY,
@@ -316,7 +336,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
     const realChargeId = stripeRes.stripeChargeId || '';
     const dashboardNotice = ` • Reflected Live in Stripe Dashboard! (Charge ID: ${realChargeId})`;
 
-    // Save card to savedCards wallet if requested
+    // Save card to savedCards wallet if requested with vaulted Stripe customer link
     if (saveCardForFuture) {
       addSavedCard(client.id, {
         cardHolder: cardHolder || client.fullName,
@@ -325,10 +345,12 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
         expiryMonth: expMonthToSave || '12',
         expiryYear: expYearToSave || '2028',
         isDefault: true,
+        stripeCustomerId: customerIdToVault,
+        stripeToken: cardToken,
       });
     }
 
-    // Execute package purchase transaction in App Context with real charge ID and discount breakdown
+    // Execute package purchase transaction in App Context with real charge ID, vaulted customer, and discount breakdown
     const res = purchasePackage(
       client.id,
       packageDef.id,
@@ -342,7 +364,12 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
         discountAmountAED,
         vatAmountAED,
         totalAmountAED: totalPayableAED,
-      }
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      customerIdToVault
     );
 
     setIsProcessing(false);

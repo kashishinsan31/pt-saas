@@ -29,6 +29,7 @@ export interface StripeChargeRequest {
   receiptEmail?: string;
   card?: StripeCardDetails; // Real card details to tokenize and charge
   cardToken?: string; // Pre-existing Stripe card or customer token
+  customerId?: string; // Stripe customer ID (cus_...) for hands-free auto-pay recurring billing
 }
 
 export interface StripeChargeResult {
@@ -55,20 +56,29 @@ export async function processStripeApiCharge(req: StripeChargeRequest): Promise<
   const amountInFils = Math.round(req.amountAED * 100);
 
   const sourceToken = req.cardToken?.trim() || '';
+  const customerId = req.customerId?.trim() || '';
 
-  if (!sourceToken) {
+  if (!sourceToken && !customerId) {
     return {
       success: false,
-      message: 'PCI-DSS Compliance Error: Card must be securely tokenized via Stripe Elements (Stripe.js) before charging. Raw card numbers cannot be transmitted directly.',
+      message: 'PCI-DSS Compliance Error: Card must be securely tokenized via Stripe Elements (Stripe.js) or linked to a vaulted Stripe Customer ID (cus_...) before charging.',
     };
   }
 
-  // Authorize and capture charge via Stripe API in real time using the secure token
+  // Authorize and capture charge via Stripe API in real time
   const chargeParams = new URLSearchParams();
   chargeParams.append('amount', amountInFils.toString());
   chargeParams.append('currency', 'aed');
-  chargeParams.append('source', sourceToken);
   chargeParams.append('description', req.description);
+
+  if (customerId) {
+    chargeParams.append('customer', customerId);
+    if (sourceToken && sourceToken.startsWith('tok_')) {
+      chargeParams.append('source', sourceToken);
+    }
+  } else if (sourceToken) {
+    chargeParams.append('source', sourceToken);
+  }
 
   if (req.statementDescriptor) {
     const cleanDescriptor = req.statementDescriptor.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 22).trim();
@@ -115,6 +125,138 @@ export async function processStripeApiCharge(req: StripeChargeRequest): Promise<
     return {
       success: false,
       message: `Failed to connect to Stripe gateway: ${error?.message || 'Network error'}`,
+    };
+  }
+}
+
+/**
+ * Creates a permanent Stripe Customer record with the tokenized card attached as default source.
+ * This allows 100% hands-free recurring auto-pay charges without client or admin intervention.
+ */
+export async function createStripeCustomer(params: {
+  secretKey: string;
+  email: string;
+  name: string;
+  cardToken?: string;
+  clientId?: string;
+}): Promise<{
+  success: boolean;
+  customerId?: string;
+  message: string;
+  rawError?: any;
+}> {
+  const secretKey = params.secretKey?.trim();
+  if (!secretKey) {
+    return {
+      success: false,
+      message: 'Stripe Secret Key missing.',
+    };
+  }
+
+  const custParams = new URLSearchParams();
+  if (params.email?.trim()) {
+    custParams.append('email', params.email.trim());
+  }
+  if (params.name?.trim()) {
+    custParams.append('name', params.name.trim());
+  }
+  custParams.append('description', `Waiter Walk Client (${params.clientId || 'Client'})`);
+
+  if (params.clientId) {
+    custParams.append('metadata[clientId]', params.clientId);
+  }
+
+  if (params.cardToken?.trim()) {
+    custParams.append('source', params.cardToken.trim());
+  }
+
+  try {
+    const response = await fetch('https://api.stripe.com/v1/customers', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${secretKey}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: custParams.toString(),
+    });
+
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      return {
+        success: false,
+        message: data.error?.message || `Failed to create Stripe customer (${response.status})`,
+        rawError: data.error,
+      };
+    }
+
+    return {
+      success: true,
+      customerId: data.id,
+      message: `Stripe Customer created successfully (${data.id}) with card vaulted for auto-pay.`,
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      message: `Network error creating Stripe customer: ${error?.message || 'Check connection'}`,
+    };
+  }
+}
+
+/**
+ * Attaches a newly tokenized card to an existing Stripe Customer.
+ */
+export async function attachCardTokenToCustomer(params: {
+  secretKey: string;
+  customerId: string;
+  cardToken: string;
+}): Promise<{
+  success: boolean;
+  sourceId?: string;
+  message: string;
+  rawError?: any;
+}> {
+  const secretKey = params.secretKey?.trim();
+  const customerId = params.customerId?.trim();
+  const cardToken = params.cardToken?.trim();
+
+  if (!secretKey || !customerId || !cardToken) {
+    return {
+      success: false,
+      message: 'Missing secretKey, customerId, or cardToken',
+    };
+  }
+
+  const sourceParams = new URLSearchParams();
+  sourceParams.append('source', cardToken);
+
+  try {
+    const response = await fetch(`https://api.stripe.com/v1/customers/${encodeURIComponent(customerId)}/sources`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${secretKey}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: sourceParams.toString(),
+    });
+
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      return {
+        success: false,
+        message: data.error?.message || `Failed to attach card to customer (${response.status})`,
+        rawError: data.error,
+      };
+    }
+
+    return {
+      success: true,
+      sourceId: data.id,
+      message: `Card source attached to Stripe Customer (${customerId}) successfully.`,
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      message: `Network error attaching card to Stripe customer: ${error?.message || 'Check connection'}`,
     };
   }
 }

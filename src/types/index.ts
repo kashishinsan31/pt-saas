@@ -32,6 +32,7 @@ export interface Client {
   additionalNotes?: string;
   assignedTrainerId: string;
   status: 'Active' | 'Inactive' | 'Archived';
+  stripeCustomerId?: string;
   healthDeclaration?: HealthDeclaration;
   healthIssues?: HealthIssueNote[];
   createdAt: string;
@@ -237,6 +238,8 @@ export interface SavedCard {
   expiryMonth: string;
   expiryYear: string;
   isDefault: boolean;
+  stripeCustomerId?: string;
+  stripeToken?: string;
   createdAt: string;
 }
 

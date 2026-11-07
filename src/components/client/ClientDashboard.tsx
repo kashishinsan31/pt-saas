@@ -1054,9 +1054,15 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
               </span>
             </div>
 
-            <p className="text-xs text-purple-200 leading-relaxed">
-              When auto-deduction is enabled, your default saved card is charged automatically every 30 calendar days to seamlessly allocate fresh training sessions without interruption.
-            </p>
+            <div className="p-3.5 bg-white/10 backdrop-blur-md rounded-xl border border-white/20 text-xs text-purple-100 leading-relaxed space-y-1.5">
+              <div className="font-black flex items-center space-x-1.5 text-white text-xs sm:text-sm">
+                <Sparkles className="w-4 h-4 text-amber-300 shrink-0" />
+                <span>100% Hands-Free Auto-Pay Subscription</span>
+              </div>
+              <p className="text-[11px] sm:text-xs text-purple-200">
+                When your personal training package reaches its 30-calendar-day validity or session credits reach 0, our background sweeper automatically charges your default card via Stripe and activates your fresh package credits. <strong>Neither you nor the gym admin needs to click or touch anything.</strong>
+              </p>
+            </div>
 
             {autoDeductionMsg && (
               <div className="bg-white/10 backdrop-blur-md p-3 rounded-xl border border-white/20 text-xs font-bold text-amber-300">
