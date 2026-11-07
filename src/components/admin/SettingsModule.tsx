@@ -1558,21 +1558,21 @@ export const SettingsModule: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Cross-Device Sync & Database Transfer (Netlify) */}
+                  {/* Cross-Device Sync & Database Transfer (Firebase Firestore) */}
                   <div className="pt-2 border-t border-slate-100 space-y-2.5">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-slate-800 text-[11px] uppercase flex items-center gap-1.5">
                         <Cloud className="w-3.5 h-3.5 text-blue-600" />
-                        <span>Netlify Multi-Device Data Sync & Backup</span>
+                        <span>Firebase Firestore Cloud Database Sync</span>
                       </span>
                       <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
                         <Check className="w-3 h-3" />
-                        <span>Multi-Tab Sync Active</span>
+                        <span>Firebase Live</span>
                       </span>
                     </div>
 
                     <p className="text-[11px] text-slate-500 leading-relaxed">
-                      On Netlify, records sync instantly across open tabs in your browser. To transfer your complete client database, package records, and promo codes between your Admin computer and mobile phone, download a backup below and import it on the other device.
+                      All SaaS records (clients, packages, sessions, saved cards, payments, and promo codes) are saved in Firebase Firestore and automatically synchronized across all devices in real-time.
                     </p>
 
                     {importFeedback && (

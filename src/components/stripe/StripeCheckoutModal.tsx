@@ -458,23 +458,23 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
   const totalPayableAED = subtotalAED + vatAmountAED;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
-      <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200 flex flex-col animate-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4 animate-in fade-in duration-150">
+      <div className="bg-white rounded-2xl sm:rounded-3xl shadow-2xl max-w-lg w-full max-h-[92vh] sm:max-h-[88vh] overflow-hidden border border-slate-200 flex flex-col animate-in zoom-in-95 duration-200">
         
-        {/* Header - Mode Aware */}
-        <div className={`p-5 text-white flex items-center justify-between relative overflow-hidden ${
+        {/* Header - Mode Aware with Little Close Button on Right Top */}
+        <div className={`px-4 py-3 sm:px-5 sm:py-3.5 text-white flex items-center justify-between shrink-0 select-none relative overflow-hidden ${
           isTestMode 
             ? 'bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 border-b border-indigo-800/60' 
             : 'bg-gradient-to-r from-blue-950 via-slate-900 to-blue-900 border-b border-blue-800/60'
         }`}>
-          <div className="flex items-center space-x-3 relative z-10">
-            <div className={`p-2.5 rounded-2xl ${isTestMode ? 'bg-indigo-600/30 border border-indigo-400/30 text-indigo-300' : 'bg-emerald-500/20 border border-emerald-400/30 text-emerald-400'}`}>
-              <CreditCard className="w-6 h-6" />
+          <div className="flex items-center space-x-2.5 sm:space-x-3 min-w-0 pr-2 relative z-10">
+            <div className={`p-2 rounded-xl shrink-0 ${isTestMode ? 'bg-indigo-600/30 border border-indigo-400/30 text-indigo-300' : 'bg-emerald-500/20 border border-emerald-400/30 text-emerald-400'}`}>
+              <CreditCard className="w-5 h-5" />
             </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <h3 className="font-extrabold text-base sm:text-lg leading-tight">Stripe Secure Payment Gateway</h3>
-                <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h3 className="font-extrabold text-sm sm:text-base leading-tight truncate">Stripe Secure Checkout</h3>
+                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border shrink-0 ${
                   isTestMode
                     ? 'bg-amber-400 text-slate-950 border-amber-300'
                     : 'bg-emerald-400 text-slate-950 border-emerald-300'
@@ -482,355 +482,354 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
                   {isTestMode ? 'TEST MODE' : 'LIVE PRODUCTION'}
                 </span>
               </div>
-              <p className="text-xs text-slate-300 mt-0.5">Waiter Walk Fitness & Wellness LLC • Dubai, UAE</p>
+              <p className="text-[11px] text-slate-300 truncate">Waiter Walk Fitness • Dubai, UAE</p>
             </div>
           </div>
 
+          {/* Little Close Button on the Right Top */}
           <button
+            type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-white/10 transition-colors shrink-0 relative z-10"
+            className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-white/10 hover:bg-white/25 active:bg-white/40 text-white transition-all cursor-pointer shrink-0 border border-white/20 shadow-xs flex items-center justify-center ml-2 relative z-10"
             aria-label="Close stripe checkout"
+            title="Close"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Gateway Configuration Status Banner */}
         {!hasConfiguredKeys ? (
-          <div className="bg-amber-50 border-b border-amber-200 p-3.5 text-xs text-amber-900 flex items-start space-x-2.5">
-            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-            <div className="space-y-0.5">
-              <span className="font-extrabold text-amber-950 block">
-                Stripe Gateway Not Configured ({isTestMode ? 'Test Sandbox Mode' : 'Live Production Mode'})
+          <div className="bg-amber-50 border-b border-amber-200 px-3.5 py-2.5 sm:px-4 sm:py-3 text-xs text-amber-900 flex items-start space-x-2.5 shrink-0">
+            <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="space-y-0.5 min-w-0">
+              <span className="font-extrabold text-amber-950 block text-[11px] sm:text-xs">
+                Stripe Gateway Not Configured ({isTestMode ? 'Test Mode' : 'Live Mode'})
               </span>
-              <p className="text-[11px] text-amber-800 leading-relaxed">
-                {!isPubKeyValid && !isSecKeyValid
-                  ? 'Both your Stripe Publishable Key (pk_...) and Secret Key (sk_...) are required.'
-                  : !isPubKeyValid
-                  ? 'Your Stripe Publishable Key (pk_...) is required to initialize Stripe Elements.'
-                  : 'Your Stripe Secret Key (sk_...) is required to authorize transactions.'}
-                {' '}Please configure in <strong>Admin Panel &gt; System Settings &gt; Stripe Payment Gateway</strong>.
+              <p className="text-[10px] sm:text-[11px] text-amber-800 leading-relaxed">
+                Configure API keys in <strong>Admin Panel &gt; System Settings &gt; Stripe Gateway</strong>.
               </p>
             </div>
           </div>
         ) : (
-          <div className="bg-emerald-50/90 border-b border-emerald-200 px-4 py-2 text-xs text-emerald-900 flex items-center justify-between">
-            <span className="flex items-center space-x-1.5 font-bold text-[11px] text-emerald-800">
-              <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              <span>Real-Time Stripe Gateway Connected • Live 256-bit Encrypted</span>
+          <div className="bg-emerald-50/90 border-b border-emerald-200 px-3.5 py-1.5 sm:px-4 sm:py-2 text-[11px] sm:text-xs text-emerald-900 flex items-center justify-between shrink-0">
+            <span className="flex items-center space-x-1.5 font-bold text-[10px] sm:text-[11px] text-emerald-800 truncate pr-2">
+              <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-600 shrink-0" />
+              <span className="truncate">Stripe Real-Time Gateway • 256-bit Encrypted</span>
             </span>
-            <span className="text-[10px] font-mono text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-full font-bold">
-              {isTestMode ? 'Stripe Sandbox' : 'Stripe Live'}
+            <span className="text-[9px] sm:text-[10px] font-mono text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-full font-bold shrink-0">
+              {isTestMode ? 'Sandbox' : 'Live'}
             </span>
           </div>
         )}
 
-        {/* Itemized Order & Invoice Summary */}
-        <div className="bg-slate-50 p-4 border-b border-slate-200 space-y-3">
-          <div className="flex justify-between items-start">
-            <div>
-              <span className="text-[10px] font-black uppercase text-blue-700 tracking-wider bg-blue-100 px-2.5 py-0.5 rounded-full border border-blue-200">
-                Selected Package Invoice
-              </span>
-              <h4 className="font-extrabold text-slate-900 text-base mt-1.5">{packageDef.name}</h4>
-              <p className="text-xs text-slate-600 font-medium">
-                {packageDef.sessionCount} Sessions ({packageDef.sessionDurationMinutes} min each) • {packageDef.trainingFrequency}
-              </p>
-            </div>
-            <div className="text-right">
-              <div className="text-2xl font-black text-slate-950">{formatAED(totalPayableAED)}</div>
-              <span className="text-[11px] text-emerald-700 font-extrabold block">+5% UAE VAT Added Separately</span>
-            </div>
-          </div>
-
-          {/* Promo Code & Discount Application Bar */}
-          <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-bold text-slate-700 uppercase tracking-wider text-[11px]">Apply Promo Code / Discount</span>
-              {discountPercent > 0 && (
-                <span className="text-[10px] font-extrabold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-200">
-                  {discountPercent}% OFF APPLIED ({appliedPromoCode})
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <input
-                type="text"
-                placeholder="Enter Promo Code (e.g. WELCOME10)"
-                value={promoInput}
-                onChange={(e) => setPromoInput(e.target.value)}
-                className="flex-1 p-2 text-xs font-mono font-bold uppercase border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-600 bg-slate-50/60"
-              />
-              <button
-                type="button"
-                onClick={() => handleApplyPromoCode()}
-                className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-lg shadow-2xs transition-colors shrink-0 cursor-pointer"
-              >
-                Apply Code
-              </button>
-            </div>
-
-            {promoSuccessMsg && <div className="text-[11px] font-bold text-emerald-700">{promoSuccessMsg}</div>}
-            {promoError && <div className="text-[11px] font-bold text-red-600">{promoError}</div>}
-
-            {promoCodes.filter((p) => p.status === 'Active').length > 0 && (
-              <div className="flex flex-wrap gap-1 pt-1 border-t border-slate-100 text-[10px]">
-                <span className="text-slate-400 font-bold self-center mr-1">Active Promos:</span>
-                {promoCodes
-                  .filter((p) => p.status === 'Active')
-                  .slice(0, 4)
-                  .map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => handleApplyPromoCode(p.code)}
-                      className="px-2 py-0.5 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded font-bold cursor-pointer transition-colors"
-                    >
-                      🏷️ {p.code} ({p.discountType === 'percentage' ? `${p.discountValue}%` : `${p.discountValue} AED`} Off)
-                    </button>
-                  ))}
-              </div>
-            )}
-          </div>
-
-          {/* Itemized Price & VAT Breakdown */}
-          <div className="p-3 bg-white rounded-xl border border-slate-200 text-xs text-slate-700 space-y-1.5">
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="font-bold text-slate-500 uppercase">Package Base Price:</span>
-              <span className="font-bold text-slate-900">{formatAED(basePriceAED)}</span>
-            </div>
-
-            {discountPercent > 0 && (
-              <div className="flex items-center justify-between text-[11px] text-emerald-700">
-                <span className="font-bold uppercase">Discount ({discountPercent}% Off):</span>
-                <span className="font-extrabold">- {formatAED(discountAmountAED)}</span>
+        {/* Form Body - Unified Responsive Scroll Area */}
+        <form onSubmit={handleCheckout} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+          <div className="flex-1 overflow-y-auto overscroll-contain p-3.5 sm:p-5 space-y-3.5 sm:space-y-4">
+            {errorMsg && (
+              <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl p-3 flex items-start space-x-2 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div className="leading-relaxed font-semibold">{errorMsg}</div>
               </div>
             )}
 
-            <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-100 font-bold text-slate-800">
-              <span className="uppercase">Net Subtotal (excl. VAT):</span>
-              <span>{formatAED(subtotalAED)}</span>
-            </div>
+            {successMsg && (
+              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-xl p-3 flex items-start space-x-2 animate-in fade-in">
+                <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="leading-relaxed font-bold">{successMsg}</div>
+              </div>
+            )}
 
-            <div className="flex items-center justify-between text-[11px] text-blue-900 font-bold">
-              <span className="uppercase">5% UAE VAT (Added Separately):</span>
-              <span>+ {formatAED(vatAmountAED)}</span>
-            </div>
+            {/* Itemized Order & Invoice Summary Box */}
+            <div className="bg-slate-50 p-3 sm:p-4 rounded-2xl border border-slate-200 space-y-3">
+              <div className="flex justify-between items-start gap-2">
+                <div className="min-w-0">
+                  <span className="text-[9px] sm:text-[10px] font-black uppercase text-blue-700 tracking-wider bg-blue-100 px-2 py-0.5 rounded-full border border-blue-200">
+                    Selected Package
+                  </span>
+                  <h4 className="font-extrabold text-slate-900 text-sm sm:text-base mt-1 truncate">{packageDef.name}</h4>
+                  <p className="text-[11px] sm:text-xs text-slate-600 font-medium">
+                    {packageDef.sessionCount} Sessions • {packageDef.sessionDurationMinutes} min each
+                  </p>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="text-lg sm:text-2xl font-black text-slate-950">{formatAED(totalPayableAED)}</div>
+                  <span className="text-[10px] sm:text-[11px] text-emerald-700 font-extrabold block">+5% UAE VAT Included</span>
+                </div>
+              </div>
 
-            <div className="flex items-center justify-between text-xs pt-1.5 border-t border-slate-200 font-black text-slate-950">
-              <span className="uppercase">Total Amount Payable:</span>
-              <span className="text-blue-700 text-sm">{formatAED(totalPayableAED)}</span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 text-center text-xs">
-            <div className="bg-white p-2 rounded-xl border border-slate-200">
-              <div className="text-[10px] text-slate-400 uppercase font-bold">Credits</div>
-              <div className="font-black text-slate-900 text-sm">{packageDef.sessionCount} Sessions</div>
-            </div>
-            <div className="bg-white p-2 rounded-xl border border-slate-200">
-              <div className="text-[10px] text-slate-400 uppercase font-bold">Start Date</div>
-              <div className="font-bold text-slate-800">{startDate}</div>
-            </div>
-            <div className="bg-white p-2 rounded-xl border border-slate-200">
-              <div className="text-[10px] text-slate-400 uppercase font-bold">{packageDef.validityDays || 30}-Day Expiry</div>
-              <div className="font-bold text-amber-700">{expiryDate}</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Form Body */}
-        <form onSubmit={handleCheckout} className="p-5 space-y-4 max-h-[60vh] overflow-y-auto">
-          {errorMsg && (
-            <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-2xl p-3.5 flex items-start space-x-2.5 animate-in fade-in">
-              <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-              <div className="leading-relaxed font-semibold">{errorMsg}</div>
-            </div>
-          )}
-
-          {successMsg && (
-            <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-2xl p-3.5 flex items-start space-x-2.5 animate-in fade-in">
-              <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
-              <div className="leading-relaxed font-bold">{successMsg}</div>
-            </div>
-          )}
-
-          {/* Payment Card Selection: Saved Cards vs New Card with Stripe.js */}
-          {clientSavedCards.length > 0 && (
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Select Payment Method
-              </label>
-              <div className="space-y-2">
-                {clientSavedCards.map((sc) => {
-                  const isSelected = selectedSavedCardId === sc.id;
-                  return (
-                    <div
-                      key={sc.id}
-                      onClick={() => {
-                        setSelectedSavedCardId(sc.id);
-                        setErrorMsg('');
-                      }}
-                      className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
-                        isSelected
-                          ? 'border-blue-600 bg-blue-50/80 ring-2 ring-blue-500/25 shadow-xs'
-                          : 'border-slate-200 bg-slate-50 hover:bg-slate-100/80'
-                      }`}
-                    >
-                      <div className="flex items-center space-x-3">
-                        <div
-                          className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
-                            isSelected ? 'border-blue-600 bg-blue-600' : 'border-slate-300 bg-white'
-                          }`}
-                        >
-                          {isSelected && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
-                        </div>
-                        <div>
-                          <div className="flex items-center space-x-2">
-                            <span className="font-extrabold text-slate-900 text-xs">{sc.brand}</span>
-                            <span className="font-mono text-xs text-slate-700 font-bold">•••• {sc.last4}</span>
-                            {sc.isDefault && (
-                              <span className="text-[10px] bg-emerald-100 text-emerald-800 font-extrabold px-1.5 py-0.5 rounded">
-                                DEFAULT
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] text-slate-500">
-                            {sc.cardHolder} • Exp {sc.expiryMonth}/{sc.expiryYear}
-                          </div>
-                        </div>
-                      </div>
-
-                      {isSelected && (
-                        <span className="text-[11px] font-bold text-blue-700 flex items-center space-x-1 shrink-0 bg-blue-100/70 px-2 py-0.5 rounded-md">
-                          <Check className="w-3.5 h-3.5 text-blue-600" />
-                          <span>Selected</span>
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-
-                {/* Option to use a new card */}
-                <div
-                  onClick={() => {
-                    setSelectedSavedCardId('NEW_CARD');
-                    setErrorMsg('');
-                  }}
-                  className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
-                    selectedSavedCardId === 'NEW_CARD'
-                      ? 'border-blue-600 bg-blue-50/80 ring-2 ring-blue-500/25 shadow-xs'
-                      : 'border-slate-200 bg-slate-50 hover:bg-slate-100/80'
-                  }`}
-                >
-                  <div className="flex items-center space-x-3">
-                    <div
-                      className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
-                        selectedSavedCardId === 'NEW_CARD' ? 'border-blue-600 bg-blue-600' : 'border-slate-300 bg-white'
-                      }`}
-                    >
-                      {selectedSavedCardId === 'NEW_CARD' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
-                    </div>
-                    <div className="flex items-center space-x-2 font-bold text-slate-900 text-xs">
-                      <CreditCard className="w-4 h-4 text-blue-600" />
-                      <span>Use a new credit or debit card</span>
-                    </div>
-                  </div>
-
-                  {selectedSavedCardId === 'NEW_CARD' && (
-                    <span className="text-[11px] font-bold text-blue-700 flex items-center space-x-1 shrink-0 bg-blue-100/70 px-2 py-0.5 rounded-md">
-                      <Check className="w-3.5 h-3.5 text-blue-600" />
-                      <span>Selected</span>
+              {/* Promo Code & Discount Application Bar */}
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px] sm:text-[11px]">Promo Code</span>
+                  {discountPercent > 0 && (
+                    <span className="text-[9px] sm:text-[10px] font-extrabold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-200">
+                      {discountPercent}% OFF APPLIED
                     </span>
                   )}
                 </div>
-              </div>
-            </div>
-          )}
 
-          {/* If a saved card is selected, show saved card confirmation notice */}
-          {selectedSavedCardId !== 'NEW_CARD' ? (
-            <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-2xl flex items-center justify-between text-xs text-blue-950 font-medium">
-              <div className="flex items-center space-x-2">
-                <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
-                <span>
-                  Using saved <strong>{clientSavedCards.find((c) => c.id === selectedSavedCardId)?.brand}</strong> card ending in{' '}
-                  <strong className="font-mono">{clientSavedCards.find((c) => c.id === selectedSavedCardId)?.last4}</strong>. Payment will be processed directly with Stripe.
-                </span>
-              </div>
-              <span className="text-[10px] font-mono text-blue-700 bg-white px-2 py-0.5 rounded-md border border-blue-200 font-bold shrink-0 ml-2">
-                PCI Vaulted
-              </span>
-            </div>
-          ) : (
-            /* If entering a new card, strictly use Stripe.js Elements */
-            <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
-              <div className="flex items-center justify-between">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  New Card Details (Stripe.js Protected)
-                </label>
-                <span className="text-[10px] text-emerald-800 bg-emerald-100/80 border border-emerald-300 px-2 py-0.5 rounded-full font-bold flex items-center space-x-1">
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Stripe PCI Encrypted</span>
-                </span>
-              </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    placeholder="e.g. WELCOME10"
+                    value={promoInput}
+                    onChange={(e) => setPromoInput(e.target.value)}
+                    className="flex-1 p-2 text-xs font-mono font-bold uppercase border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-600 bg-slate-50/60 min-w-0"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleApplyPromoCode()}
+                    className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-lg shadow-2xs transition-colors shrink-0 cursor-pointer"
+                  >
+                    Apply
+                  </button>
+                </div>
 
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
-                  Cardholder Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={cardHolder}
-                  onChange={(e) => setCardHolder(e.target.value)}
-                  className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 bg-white"
-                  placeholder="Full Name as shown on card"
-                />
-              </div>
+                {promoSuccessMsg && <div className="text-[11px] font-bold text-emerald-700">{promoSuccessMsg}</div>}
+                {promoError && <div className="text-[11px] font-bold text-red-600">{promoError}</div>}
 
-              <div className="p-3 border border-slate-300 rounded-xl bg-white shadow-2xs focus-within:ring-2 focus-within:ring-blue-600 focus-within:border-blue-600 min-h-[46px]">
-                <div ref={stripeContainerRef} id="stripe-card-element" className="w-full" />
-                {!stripeCardReady && (
-                  <div className="text-slate-400 text-xs py-1 flex items-center space-x-2">
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
-                    <span>Connecting to Stripe Secure Elements...</span>
+                {promoCodes.filter((p) => p.status === 'Active').length > 0 && (
+                  <div className="flex flex-wrap gap-1 pt-1 border-t border-slate-100 text-[10px]">
+                    <span className="text-slate-400 font-bold self-center mr-1">Active:</span>
+                    {promoCodes
+                      .filter((p) => p.status === 'Active')
+                      .slice(0, 3)
+                      .map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => handleApplyPromoCode(p.code)}
+                          className="px-2 py-0.5 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded font-bold cursor-pointer transition-colors"
+                        >
+                          🏷️ {p.code} ({p.discountType === 'percentage' ? `${p.discountValue}%` : `${p.discountValue} AED`})
+                        </button>
+                      ))}
                   </div>
                 )}
               </div>
 
-              <div className="text-[10px] text-slate-500 flex items-center space-x-1">
-                <Lock className="w-3 h-3 text-slate-400" />
-                <span>Card data is tokenized directly inside Stripe's secure iframe.</span>
+              {/* Itemized Price & VAT Breakdown */}
+              <div className="p-2.5 sm:p-3 bg-white rounded-xl border border-slate-200 text-xs text-slate-700 space-y-1">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-bold text-slate-500 uppercase">Base Price:</span>
+                  <span className="font-bold text-slate-900">{formatAED(basePriceAED)}</span>
+                </div>
+
+                {discountPercent > 0 && (
+                  <div className="flex items-center justify-between text-[11px] text-emerald-700">
+                    <span className="font-bold uppercase">Discount ({discountPercent}%):</span>
+                    <span className="font-extrabold">- {formatAED(discountAmountAED)}</span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-100 font-bold text-slate-800">
+                  <span className="uppercase">Net Subtotal:</span>
+                  <span>{formatAED(subtotalAED)}</span>
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] text-blue-900 font-bold">
+                  <span className="uppercase">5% UAE VAT:</span>
+                  <span>+ {formatAED(vatAmountAED)}</span>
+                </div>
+
+                <div className="flex items-center justify-between text-xs pt-1.5 border-t border-slate-200 font-black text-slate-950">
+                  <span className="uppercase">Total Amount Payable:</span>
+                  <span className="text-blue-700 text-sm font-black">{formatAED(totalPayableAED)}</span>
+                </div>
+              </div>
+
+              {/* 3 Stats Grid */}
+              <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center text-xs">
+                <div className="bg-white p-2 rounded-xl border border-slate-200">
+                  <div className="text-[9px] sm:text-[10px] text-slate-400 uppercase font-bold">Credits</div>
+                  <div className="font-black text-slate-900 text-xs sm:text-sm">{packageDef.sessionCount} Sessions</div>
+                </div>
+                <div className="bg-white p-2 rounded-xl border border-slate-200">
+                  <div className="text-[9px] sm:text-[10px] text-slate-400 uppercase font-bold">Starts</div>
+                  <div className="font-bold text-slate-800 text-[11px] sm:text-xs truncate">{startDate}</div>
+                </div>
+                <div className="bg-white p-2 rounded-xl border border-slate-200">
+                  <div className="text-[9px] sm:text-[10px] text-slate-400 uppercase font-bold">{packageDef.validityDays || 30}-Day Expiry</div>
+                  <div className="font-bold text-amber-700 text-[11px] sm:text-xs truncate">{expiryDate}</div>
+                </div>
               </div>
             </div>
-          )}
 
-          <label className="flex items-center space-x-2 cursor-pointer text-xs font-semibold text-slate-700 select-none">
-            <input
-              type="checkbox"
-              checked={saveCardForFuture}
-              onChange={(e) => setSaveCardForFuture(e.target.checked)}
-              className="rounded text-blue-600 focus:ring-blue-500 w-4 h-4 shrink-0"
-            />
-            <span>Save card securely in Stripe Vault for future package renewals</span>
-          </label>
+            {/* Payment Card Selection: Saved Cards vs New Card with Stripe.js */}
+            {clientSavedCards.length > 0 && (
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Select Payment Method
+                </label>
+                <div className="space-y-2">
+                  {clientSavedCards.map((sc) => {
+                    const isSelected = selectedSavedCardId === sc.id;
+                    return (
+                      <div
+                        key={sc.id}
+                        onClick={() => {
+                          setSelectedSavedCardId(sc.id);
+                          setErrorMsg('');
+                        }}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                          isSelected
+                            ? 'border-blue-600 bg-blue-50/80 ring-2 ring-blue-500/25 shadow-xs'
+                            : 'border-slate-200 bg-slate-50 hover:bg-slate-100/80'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2.5 sm:space-x-3 min-w-0 pr-2">
+                          <div
+                            className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                              isSelected ? 'border-blue-600 bg-blue-600' : 'border-slate-300 bg-white'
+                            }`}
+                          >
+                            {isSelected && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center space-x-1.5 sm:space-x-2 flex-wrap">
+                              <span className="font-extrabold text-slate-900 text-xs">{sc.brand}</span>
+                              <span className="font-mono text-xs text-slate-700 font-bold">•••• {sc.last4}</span>
+                              {sc.isDefault && (
+                                <span className="text-[9px] bg-emerald-100 text-emerald-800 font-extrabold px-1.5 py-0.5 rounded">
+                                  DEFAULT
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] sm:text-[11px] text-slate-500 truncate">
+                              {sc.cardHolder} • Exp {sc.expiryMonth}/{sc.expiryYear}
+                            </div>
+                          </div>
+                        </div>
 
-          {/* Payment Terms & Conditions and Refund Policy */}
-          <div className="border border-slate-200 rounded-2xl overflow-hidden bg-slate-50">
-            <div className="px-3.5 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between">
-              <div className="flex items-center space-x-1.5">
-                <Scale className="w-4 h-4 text-blue-600" />
-                <span className="font-extrabold text-slate-900 text-xs">Payment Terms & Conditions & Refund Policy</span>
+                        {isSelected && (
+                          <span className="text-[10px] sm:text-[11px] font-bold text-blue-700 flex items-center space-x-1 shrink-0 bg-blue-100/70 px-2 py-0.5 rounded-md">
+                            <Check className="w-3.5 h-3.5 text-blue-600" />
+                            <span>Selected</span>
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {/* Option to use a new card */}
+                  <div
+                    onClick={() => {
+                      setSelectedSavedCardId('NEW_CARD');
+                      setErrorMsg('');
+                    }}
+                    className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                      selectedSavedCardId === 'NEW_CARD'
+                        ? 'border-blue-600 bg-blue-50/80 ring-2 ring-blue-500/25 shadow-xs'
+                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100/80'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2.5 sm:space-x-3">
+                      <div
+                        className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                          selectedSavedCardId === 'NEW_CARD' ? 'border-blue-600 bg-blue-600' : 'border-slate-300 bg-white'
+                        }`}
+                      >
+                        {selectedSavedCardId === 'NEW_CARD' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                      </div>
+                      <div className="flex items-center space-x-2 font-bold text-slate-900 text-xs">
+                        <CreditCard className="w-4 h-4 text-blue-600" />
+                        <span>Use a new credit or debit card</span>
+                      </div>
+                    </div>
+
+                    {selectedSavedCardId === 'NEW_CARD' && (
+                      <span className="text-[10px] sm:text-[11px] font-bold text-blue-700 flex items-center space-x-1 shrink-0 bg-blue-100/70 px-2 py-0.5 rounded-md">
+                        <Check className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Selected</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-              <span className="text-[10px] font-bold text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
-                Dubai PTMS
-              </span>
-            </div>
-            <div className="p-3 max-h-28 overflow-y-auto text-[11px] text-slate-600 font-sans leading-relaxed whitespace-pre-line bg-white/70">
-              {settings.paymentTermsAndConditions || (
-                `WAITER WALK FITNESS & WELLNESS LLC - DUBAI, UAE
+            )}
+
+            {/* If a saved card is selected, show saved card confirmation notice */}
+            {selectedSavedCardId !== 'NEW_CARD' ? (
+              <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between text-xs text-blue-950 font-medium">
+                <div className="flex items-center space-x-2 min-w-0 pr-2">
+                  <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span className="truncate">
+                    Paying with saved <strong>{clientSavedCards.find((c) => c.id === selectedSavedCardId)?.brand}</strong> (•••• {clientSavedCards.find((c) => c.id === selectedSavedCardId)?.last4})
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono text-blue-700 bg-white px-2 py-0.5 rounded-md border border-blue-200 font-bold shrink-0">
+                  PCI Vaulted
+                </span>
+              </div>
+            ) : (
+              /* If entering a new card, strictly use Stripe.js Elements */
+              <div className="space-y-2.5 sm:space-y-3 bg-slate-50 p-3 sm:p-4 rounded-xl border border-slate-200">
+                <div className="flex items-center justify-between">
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                    New Card Details (Stripe.js Protected)
+                  </label>
+                  <span className="text-[9px] sm:text-[10px] text-emerald-800 bg-emerald-100/80 border border-emerald-300 px-2 py-0.5 rounded-full font-bold flex items-center space-x-1">
+                    <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                    <span>PCI Encrypted</span>
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] sm:text-[11px] font-bold text-slate-600 uppercase mb-1">
+                    Cardholder Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={cardHolder}
+                    onChange={(e) => setCardHolder(e.target.value)}
+                    className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-blue-600 bg-white"
+                    placeholder="Full Name as shown on card"
+                  />
+                </div>
+
+                <div className="p-3 border border-slate-300 rounded-xl bg-white shadow-2xs focus-within:ring-2 focus-within:ring-blue-600 focus-within:border-blue-600 min-h-[46px]">
+                  <div ref={stripeContainerRef} id="stripe-card-element" className="w-full" />
+                  {!stripeCardReady && (
+                    <div className="text-slate-400 text-xs py-1 flex items-center space-x-2">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                      <span>Connecting to Stripe Secure Elements...</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="text-[10px] text-slate-500 flex items-center space-x-1">
+                  <Lock className="w-3 h-3 text-slate-400 shrink-0" />
+                  <span>Card data is tokenized directly inside Stripe's secure iframe.</span>
+                </div>
+              </div>
+            )}
+
+            <label className="flex items-center space-x-2 cursor-pointer text-xs font-semibold text-slate-700 select-none">
+              <input
+                type="checkbox"
+                checked={saveCardForFuture}
+                onChange={(e) => setSaveCardForFuture(e.target.checked)}
+                className="rounded text-blue-600 focus:ring-blue-500 w-4 h-4 shrink-0"
+              />
+              <span className="text-[11px] sm:text-xs">Save card securely in Stripe Vault for future package renewals</span>
+            </label>
+
+            {/* Payment Terms & Conditions and Refund Policy */}
+            <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50">
+              <div className="px-3 py-1.5 sm:px-3.5 sm:py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between">
+                <div className="flex items-center space-x-1.5">
+                  <Scale className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span className="font-extrabold text-slate-900 text-[11px] sm:text-xs">Payment Terms & Refund Policy</span>
+                </div>
+                <span className="text-[9px] sm:text-[10px] font-bold text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
+                  Dubai PTMS
+                </span>
+              </div>
+              <div className="p-2.5 sm:p-3 max-h-24 sm:max-h-28 overflow-y-auto text-[10px] sm:text-[11px] text-slate-600 font-sans leading-relaxed whitespace-pre-line bg-white/70">
+                {settings.paymentTermsAndConditions || (
+                  `WAITER WALK FITNESS & WELLNESS LLC - DUBAI, UAE
 CLIENT PAYMENT TERMS & CONDITIONS
 
 1. STRICT 30-CALENDAR-DAY PACKAGE EXPIRATION
@@ -847,82 +846,90 @@ All package prices are subject to 5% UAE Value Added Tax (VAT) in compliance wit
 
 5. NON-TRANSFERABILITY & REFUND POLICY
 Personal training session packages are personal and non-transferable. Package refunds are strictly subject to management discretion and require supporting medical documentation.`
-              )}
+                )}
+              </div>
+            </div>
+
+            {/* Option to tick to agree to the terms & conditions */}
+            <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-2.5 sm:p-3">
+              <label className="flex items-start space-x-2 cursor-pointer text-xs font-semibold text-slate-800 select-none">
+                <input
+                  type="checkbox"
+                  checked={termsAgreed}
+                  onChange={(e) => {
+                    setTermsAgreed(e.target.checked);
+                    setErrorMsg('');
+                  }}
+                  className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 w-4 h-4 shrink-0"
+                />
+                <span className="leading-snug text-[11px] sm:text-xs">
+                  I have read and agree to the <strong className="text-blue-900">Payment Terms & Conditions</strong> and <strong className="text-blue-900">Refund Policy</strong> (including strict 30-day package expiry and 12-hour cancellation rules).
+                </span>
+              </label>
+            </div>
+
+            {/* Mandatory Recurring Consent Checkbox */}
+            <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-2.5 sm:p-3 space-y-1.5">
+              <div className="flex items-center space-x-1.5 text-amber-900 font-bold text-[11px] sm:text-xs">
+                <RefreshCw className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                <span>Automatic Recurring 30-Day Subscription Authorization</span>
+              </div>
+              <label className="flex items-start space-x-2 cursor-pointer text-[10px] sm:text-[11px] text-slate-700 leading-relaxed">
+                <input
+                  type="checkbox"
+                  checked={consentChecked}
+                  onChange={(e) => setConsentChecked(e.target.checked)}
+                  className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 w-4 h-4 shrink-0"
+                />
+                <span>
+                  "I authorize Waiter Walk to automatically charge my saved payment card <strong>AED {totalPayableAED}</strong> every 30 days until I cancel my subscription. Package includes <strong>{packageDef.sessionCount}</strong> sessions with strict 30-day expiry."
+                </span>
+              </label>
             </div>
           </div>
 
-          {/* Option to tick to agree to the terms & conditions */}
-          <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-3">
-            <label className="flex items-start space-x-2.5 cursor-pointer text-xs font-semibold text-slate-800 select-none">
-              <input
-                type="checkbox"
-                checked={termsAgreed}
-                onChange={(e) => {
-                  setTermsAgreed(e.target.checked);
-                  setErrorMsg('');
-                }}
-                className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 w-4 h-4 shrink-0"
-              />
-              <span className="leading-snug">
-                I have read and agree to the <strong className="text-blue-900">Payment Terms & Conditions</strong> and <strong className="text-blue-900">Refund Policy</strong> (including strict 30-day package expiration and 12-hour session cancellation policy).
-              </span>
-            </label>
-          </div>
-
-          {/* Mandatory Recurring Consent Checkbox */}
-          <div className="bg-amber-50/80 border border-amber-200 rounded-2xl p-3 space-y-2">
-            <div className="flex items-center space-x-2 text-amber-900 font-bold text-xs">
-              <RefreshCw className="w-3.5 h-3.5 text-amber-700" />
-              <span>Automatic Recurring 30-Day Subscription Authorization</span>
+          {/* Sticky Bottom Action Footer */}
+          <div className="sticky bottom-0 bg-white/95 backdrop-blur-xs border-t border-slate-200 px-3.5 py-2.5 sm:px-5 sm:py-3.5 flex items-center justify-between gap-2 shrink-0 z-10 shadow-xs">
+            <div className="text-left hidden xs:block sm:block">
+              <span className="text-[9px] text-slate-400 uppercase font-bold block leading-none">Total Due</span>
+              <span className="text-sm sm:text-base font-black text-slate-900 leading-tight">{formatAED(totalPayableAED)}</span>
             </div>
-            <label className="flex items-start space-x-2 cursor-pointer text-xs text-slate-700 leading-relaxed">
-              <input
-                type="checkbox"
-                checked={consentChecked}
-                onChange={(e) => setConsentChecked(e.target.checked)}
-                className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 w-4 h-4 shrink-0"
-              />
-              <span>
-                "I authorize Waiter Walk to automatically charge my saved payment card <strong>AED {totalPayableAED}</strong> every 30 days until I cancel my subscription. I understand that my package includes <strong>{packageDef.sessionCount}</strong> training sessions and expires after 30 days."
-              </span>
-            </label>
-          </div>
-
-          {/* Security Assurance */}
-          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-            <div className="flex items-center space-x-1.5 text-emerald-700 font-bold text-[11px]">
-              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>256-bit Stripe TLS Encrypted</span>
+            <div className="flex items-center space-x-2 w-full xs:w-auto sm:w-auto justify-end">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-3.5 sm:px-4 py-2 sm:py-2.5 border border-slate-300 rounded-xl text-slate-700 font-bold text-xs hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!hasConfiguredKeys || isProcessing || !termsAgreed || (isRecurring && !consentChecked)}
+                className={`flex-1 xs:flex-initial sm:flex-initial flex items-center justify-center space-x-1.5 py-2 sm:py-2.5 px-4 sm:px-5 rounded-xl shadow-md font-extrabold text-xs sm:text-sm transition-all ${
+                  !hasConfiguredKeys || isProcessing || !termsAgreed || (isRecurring && !consentChecked)
+                    ? 'bg-slate-200 text-slate-500 cursor-not-allowed opacity-80 border border-slate-300'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer focus:ring-4 focus:ring-blue-200'
+                }`}
+              >
+                {!hasConfiguredKeys ? (
+                  <>
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span className="truncate">Configure API Keys</span>
+                  </>
+                ) : isProcessing ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
+                    <span>Processing Payment...</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-3.5 h-3.5 shrink-0" />
+                    <span>Pay {formatAED(totalPayableAED)}</span>
+                  </>
+                )}
+              </button>
             </div>
-            <span className="text-[10px] text-slate-400">FTA Tax Invoice Generated</span>
           </div>
-
-          <button
-            type="submit"
-            disabled={!hasConfiguredKeys || isProcessing || !termsAgreed || (isRecurring && !consentChecked)}
-            className={`w-full flex items-center justify-center space-x-2 py-3.5 px-4 rounded-2xl shadow-lg font-extrabold text-sm transition-all ${
-              !hasConfiguredKeys || isProcessing || !termsAgreed || (isRecurring && !consentChecked)
-                ? 'bg-slate-200 text-slate-500 cursor-not-allowed opacity-80 border border-slate-300'
-                : 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer focus:ring-4 focus:ring-blue-200'
-            }`}
-          >
-            {!hasConfiguredKeys ? (
-              <>
-                <AlertTriangle className="w-4 h-4 text-amber-600" />
-                <span>Configure Stripe API Keys in Settings to Pay</span>
-              </>
-            ) : isProcessing ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>Communicating with Stripe in Real-Time...</span>
-              </>
-            ) : (
-              <>
-                <ShieldCheck className="w-4 h-4" />
-                <span>Pay {formatAED(totalPayableAED)} & Activate Package</span>
-              </>
-            )}
-          </button>
         </form>
       </div>
     </div>

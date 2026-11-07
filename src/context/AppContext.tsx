@@ -5,6 +5,7 @@ import {
   Trainer,
   PackageDefinition,
   ClientPackage,
+  ClientPackageStatus,
   SessionBooking,
   SessionTransaction,
   PaymentRecord,
@@ -20,6 +21,15 @@ import {
   PromoCode,
 } from '../types';
 import { processStripeApiCharge } from '../services/stripeApi';
+import {
+  subscribeCollection,
+  subscribeDocument,
+  setDocument,
+  updateDocument,
+  deleteDocument,
+  seedCollectionIfEmpty,
+  seedSettingsIfEmpty,
+} from '../services/firestoreService';
 import {
   initialUsers,
   initialClients,
@@ -194,11 +204,10 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const LOCAL_STORAGE_KEY = 'waiter_walk_ptms_clean_prod_v2';
-
-// Clear legacy dummy test data on migration to clean production state
+// Clean up any legacy localStorage so all SaaS data lives in Firebase Firestore
 try {
   if (typeof window !== 'undefined') {
+    localStorage.removeItem('waiter_walk_ptms_clean_prod_v2');
     localStorage.removeItem('waiter_walk_ptms_state_v1');
   }
 } catch (e) {
@@ -206,140 +215,122 @@ try {
 }
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Load state from localStorage if present
-  const savedState = React.useMemo(() => {
+  // Active session user (restored from session storage if present)
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
-      const item = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (item) return JSON.parse(item);
+      const sess = sessionStorage.getItem('waiterwalk_session_user');
+      if (sess) return JSON.parse(sess);
     } catch (e) {
-      console.error('Failed to load state from localStorage', e);
+      // ignore
     }
-    return null;
-  }, []);
-
-  const [currentUser, setCurrentUser] = useState<User | null>(
-    savedState?.currentUser || initialUsers[0] // Default to Chief Admin
-  );
-  const [users, setUsers] = useState<User[]>(savedState?.users || initialUsers);
-  const [clients, setClients] = useState<Client[]>(savedState?.clients || initialClients);
-  const [trainers, setTrainers] = useState<Trainer[]>(savedState?.trainers || initialTrainers);
-  const [packageDefinitions, setPackageDefinitions] = useState<PackageDefinition[]>(
-    savedState?.packageDefinitions || initialPackageDefinitions
-  );
-  const [clientPackages, setClientPackages] = useState<ClientPackage[]>(
-    savedState?.clientPackages || initialClientPackages
-  );
-  const [bookings, setBookings] = useState<SessionBooking[]>(savedState?.bookings || initialBookings);
-  const [transactions, setTransactions] = useState<SessionTransaction[]>(
-    savedState?.transactions || initialTransactions
-  );
-  const [payments, setPayments] = useState<PaymentRecord[]>(savedState?.payments || initialPayments);
-  const [subscriptions, setSubscriptions] = useState<SubscriptionRecord[]>(
-    savedState?.subscriptions || initialSubscriptions
-  );
-  const [savedCards, setSavedCards] = useState<SavedCard[]>(
-    savedState?.savedCards || initialSavedCards
-  );
-  const [notifications, setNotifications] = useState<NotificationItem[]>(
-    savedState?.notifications || initialNotifications
-  );
-  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>(savedState?.auditLogs || initialAuditLogs);
-  const [settings, setSettings] = useState<SystemSettings>(() => {
-    if (savedState?.settings) {
-      return {
-        ...initialSettings,
-        ...savedState.settings,
-        stripeSecretKey: (savedState.settings.stripeSecretKey?.trim()) || initialSettings.stripeSecretKey,
-        stripeLiveSecretKey: (savedState.settings.stripeLiveSecretKey?.trim()) || initialSettings.stripeLiveSecretKey,
-        stripePublishableKey: (savedState.settings.stripePublishableKey?.trim()) || initialSettings.stripePublishableKey,
-        stripeLivePublishableKey: (savedState.settings.stripeLivePublishableKey?.trim()) || initialSettings.stripeLivePublishableKey,
-        paymentTermsAndConditions:
-          savedState.settings.paymentTermsAndConditions || initialSettings.paymentTermsAndConditions,
-        healthDeclarationText:
-          savedState.settings.healthDeclarationText || initialSettings.healthDeclarationText,
-      };
-    }
-    return initialSettings;
+    return initialUsers[0]; // Default to Chief Admin
   });
-  const [slides, setSlides] = useState<DashboardSlide[]>(savedState?.slides || initialSlides);
-  const [promoCodes, setPromoCodes] = useState<PromoCode[]>(
-    savedState?.promoCodes || initialPromoCodes
-  );
+
+  // Track session user in sessionStorage for page refreshes
+  useEffect(() => {
+    try {
+      if (currentUser) {
+        sessionStorage.setItem('waiterwalk_session_user', JSON.stringify(currentUser));
+      } else {
+        sessionStorage.removeItem('waiterwalk_session_user');
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [currentUser]);
+
+  // Firestore-backed SaaS Entities
+  const [users, setUsers] = useState<User[]>(initialUsers);
+  const [clients, setClients] = useState<Client[]>(initialClients);
+  const [trainers, setTrainers] = useState<Trainer[]>(initialTrainers);
+  const [packageDefinitions, setPackageDefinitions] = useState<PackageDefinition[]>(initialPackageDefinitions);
+  const [clientPackages, setClientPackages] = useState<ClientPackage[]>(initialClientPackages);
+  const [bookings, setBookings] = useState<SessionBooking[]>(initialBookings);
+  const [transactions, setTransactions] = useState<SessionTransaction[]>(initialTransactions);
+  const [payments, setPayments] = useState<PaymentRecord[]>(initialPayments);
+  const [subscriptions, setSubscriptions] = useState<SubscriptionRecord[]>(initialSubscriptions);
+  const [savedCards, setSavedCards] = useState<SavedCard[]>(initialSavedCards);
+  const [notifications, setNotifications] = useState<NotificationItem[]>(initialNotifications);
+  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>(initialAuditLogs);
+  const [settings, setSettings] = useState<SystemSettings>(initialSettings);
+  const [slides, setSlides] = useState<DashboardSlide[]>(initialSlides);
+  const [promoCodes, setPromoCodes] = useState<PromoCode[]>(initialPromoCodes);
   const [testSuiteResults, setTestSuiteResults] = useState<TestResult[]>([]);
 
-  // Persist state to localStorage
+  // 1. Initialize Firestore baseline records and real-time onSnapshot listeners
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        LOCAL_STORAGE_KEY,
-        JSON.stringify({
-          currentUser,
-          users,
-          clients,
-          trainers,
-          packageDefinitions,
-          clientPackages,
-          bookings,
-          transactions,
-          payments,
-          subscriptions,
-          notifications,
-          auditLogs,
-          settings,
-          slides,
-          promoCodes,
-        })
-      );
-    } catch (e) {
-      console.error('Failed to save state to localStorage', e);
-    }
-  }, [
-    currentUser,
-    users,
-    clients,
-    trainers,
-    packageDefinitions,
-    clientPackages,
-    bookings,
-    transactions,
-    payments,
-    subscriptions,
-    notifications,
-    auditLogs,
-    settings,
-    slides,
-    promoCodes,
-  ]);
+    // Seed default records if Firestore collections are unpopulated
+    seedCollectionIfEmpty('users', initialUsers);
+    seedCollectionIfEmpty('packageDefinitions', initialPackageDefinitions);
+    seedCollectionIfEmpty('slides', initialSlides);
+    seedCollectionIfEmpty('promoCodes', initialPromoCodes);
+    seedCollectionIfEmpty('auditLogs', initialAuditLogs);
+    seedSettingsIfEmpty(initialSettings);
 
-  // Synchronize across browser tabs automatically in real-time
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === LOCAL_STORAGE_KEY && e.newValue) {
-        try {
-          const freshData = JSON.parse(e.newValue);
-          if (Array.isArray(freshData.clients)) setClients(freshData.clients);
-          if (Array.isArray(freshData.users)) setUsers(freshData.users);
-          if (Array.isArray(freshData.trainers)) setTrainers(freshData.trainers);
-          if (Array.isArray(freshData.clientPackages)) setClientPackages(freshData.clientPackages);
-          if (Array.isArray(freshData.packageDefinitions)) setPackageDefinitions(freshData.packageDefinitions);
-          if (Array.isArray(freshData.bookings)) setBookings(freshData.bookings);
-          if (Array.isArray(freshData.transactions)) setTransactions(freshData.transactions);
-          if (Array.isArray(freshData.payments)) setPayments(freshData.payments);
-          if (Array.isArray(freshData.subscriptions)) setSubscriptions(freshData.subscriptions);
-          if (Array.isArray(freshData.savedCards)) setSavedCards(freshData.savedCards);
-          if (Array.isArray(freshData.notifications)) setNotifications(freshData.notifications);
-          if (Array.isArray(freshData.auditLogs)) setAuditLogs(freshData.auditLogs);
-          if (freshData.settings) setSettings((prev) => ({ ...prev, ...freshData.settings }));
-          if (Array.isArray(freshData.slides)) setSlides(freshData.slides);
-          if (Array.isArray(freshData.promoCodes)) setPromoCodes(freshData.promoCodes);
-        } catch (err) {
-          console.error('Error syncing tab state from storage:', err);
-        }
-      }
+    // Real-time Firestore subscriptions for live multi-device syncing
+    const unsubUsers = subscribeCollection<User>('users', (items) => {
+      if (items.length > 0) setUsers(items);
+    });
+    const unsubClients = subscribeCollection<Client>('clients', (items) => {
+      setClients(items);
+    });
+    const unsubTrainers = subscribeCollection<Trainer>('trainers', (items) => {
+      setTrainers(items);
+    });
+    const unsubPackageDefs = subscribeCollection<PackageDefinition>('packageDefinitions', (items) => {
+      if (items.length > 0) setPackageDefinitions(items);
+    });
+    const unsubClientPackages = subscribeCollection<ClientPackage>('clientPackages', (items) => {
+      setClientPackages(items);
+    });
+    const unsubBookings = subscribeCollection<SessionBooking>('bookings', (items) => {
+      setBookings(items);
+    });
+    const unsubTransactions = subscribeCollection<SessionTransaction>('transactions', (items) => {
+      setTransactions(items);
+    });
+    const unsubPayments = subscribeCollection<PaymentRecord>('payments', (items) => {
+      setPayments(items);
+    });
+    const unsubSubscriptions = subscribeCollection<SubscriptionRecord>('subscriptions', (items) => {
+      setSubscriptions(items);
+    });
+    const unsubSavedCards = subscribeCollection<SavedCard>('savedCards', (items) => {
+      setSavedCards(items);
+    });
+    const unsubNotifications = subscribeCollection<NotificationItem>('notifications', (items) => {
+      setNotifications(items);
+    });
+    const unsubAuditLogs = subscribeCollection<AuditLogItem>('auditLogs', (items) => {
+      if (items.length > 0) setAuditLogs(items);
+    });
+    const unsubSlides = subscribeCollection<DashboardSlide>('slides', (items) => {
+      if (items.length > 0) setSlides(items);
+    });
+    const unsubPromoCodes = subscribeCollection<PromoCode>('promoCodes', (items) => {
+      if (items.length > 0) setPromoCodes(items);
+    });
+    const unsubSettings = subscribeDocument<SystemSettings>('settings', 'global', (item) => {
+      if (item) setSettings(item);
+    });
+
+    return () => {
+      unsubUsers();
+      unsubClients();
+      unsubTrainers();
+      unsubPackageDefs();
+      unsubClientPackages();
+      unsubBookings();
+      unsubTransactions();
+      unsubPayments();
+      unsubSubscriptions();
+      unsubSavedCards();
+      unsubNotifications();
+      unsubAuditLogs();
+      unsubSlides();
+      unsubPromoCodes();
+      unsubSettings();
     };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
   // Automatic 30-Day Package Expiry check engine
@@ -523,6 +514,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       details,
     };
     setAuditLogs((prev) => [newLog, ...prev]);
+    setDocument('auditLogs', newLog.id, newLog);
   };
 
   const addSavedCard = (clientId: string, cardData: Omit<SavedCard, 'id' | 'clientId' | 'createdAt'>): SavedCard => {
@@ -540,12 +532,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return [...prev, newCard];
     });
 
+    // Write to Firestore cloud backend
+    setDocument('savedCards', newCard.id, newCard);
+    if (cardData.isDefault) {
+      savedCards
+        .filter((c) => c.clientId === clientId && c.isDefault)
+        .forEach((c) => updateDocument('savedCards', c.id, { isDefault: false }));
+    }
+
     logAudit('ADD_SAVED_CARD', `Client ${clientId} added saved payment card ${cardData.brand} ending in ${cardData.last4}`);
     return newCard;
   };
 
   const removeSavedCard = (cardId: string) => {
     setSavedCards((prev) => prev.filter((c) => c.id !== cardId));
+    deleteDocument('savedCards', cardId);
     logAudit('REMOVE_SAVED_CARD', `Removed saved card ${cardId}`);
   };
 
@@ -553,7 +554,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSavedCards((prev) =>
       prev.map((c) => {
         if (c.clientId === clientId) {
-          return { ...c, isDefault: c.id === cardId };
+          const isDef = c.id === cardId;
+          updateDocument('savedCards', c.id, { isDefault: isDef });
+          return { ...c, isDefault: isDef };
         }
         return c;
       })
@@ -896,6 +899,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return [...filtered, newUser];
     });
 
+    // Write to Firestore cloud database
+    setDocument('clients', newClient.id, newClient);
+    setDocument('users', newUser.id, newUser);
+
     logAudit('CREATE_CLIENT', `Created new client ${clientData.fullName} (${id}) with portal credentials`);
     return newClient;
   };
@@ -918,6 +925,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (updates.dateOfBirth) {
             updated.age = calculateAge(updates.dateOfBirth);
           }
+          setDocument('clients', id, updated);
           return updated;
         }
         return c;
@@ -929,12 +937,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setUsers((prev) =>
         prev.map((u) => {
           if (u.associatedId === id || (cleanEmail && u.email.toLowerCase() === cleanEmail)) {
-            return {
+            const updatedUser = {
               ...u,
               ...(cleanEmail ? { email: cleanEmail } : {}),
               ...(cleanName ? { name: cleanName } : {}),
               ...(cleanPassword ? { password: cleanPassword } : {}),
             };
+            setDocument('users', updatedUser.id, updatedUser);
+            return updatedUser;
           }
           return u;
         })
@@ -946,6 +956,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deactivateClient = (id: string) => {
     setClients((prev) => prev.map((c) => (c.id === id ? { ...c, status: 'Inactive' } : c)));
+    updateDocument('clients', id, { status: 'Inactive' });
     logAudit('DEACTIVATE_CLIENT', `Deactivated client ${id}`);
   };
 
@@ -962,9 +973,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       prev.map((c) => {
         if (c.id === clientId) {
           const currentIssues = c.healthIssues || [];
+          const updatedIssues = [newNote, ...currentIssues];
+          updateDocument('clients', clientId, { healthIssues: updatedIssues });
           return {
             ...c,
-            healthIssues: [newNote, ...currentIssues],
+            healthIssues: updatedIssues,
           };
         }
         return c;
@@ -980,9 +993,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       prev.map((c) => {
         if (c.id === clientId) {
           const currentIssues = c.healthIssues || [];
+          const updatedIssues = currentIssues.map((item) => (item.id === issueId ? { ...item, ...updates } : item));
+          updateDocument('clients', clientId, { healthIssues: updatedIssues });
           return {
             ...c,
-            healthIssues: currentIssues.map((item) => (item.id === issueId ? { ...item, ...updates } : item)),
+            healthIssues: updatedIssues,
           };
         }
         return c;
@@ -995,9 +1010,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setClients((prev) =>
       prev.map((c) => {
         if (c.id === clientId) {
+          const updatedIssues = (c.healthIssues || []).filter((item) => item.id !== issueId);
+          updateDocument('clients', clientId, { healthIssues: updatedIssues });
           return {
             ...c,
-            healthIssues: (c.healthIssues || []).filter((item) => item.id !== issueId),
+            healthIssues: updatedIssues,
           };
         }
         return c;
@@ -1010,6 +1027,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setClients((prev) =>
       prev.map((c) => {
         if (c.id === clientId) {
+          updateDocument('clients', clientId, { healthDeclaration: declaration });
           return {
             ...c,
             healthDeclaration: declaration,
@@ -1020,7 +1038,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
     logAudit('HEALTH_DECLARATION_SIGNED', `Health & Illness Declaration recorded for client ${clientId}`);
   };
-
 
   const addTrainer = (trainerData: Omit<Trainer, 'id' | 'status' | 'createdAt'>): Trainer => {
     const id = `WW-TR-${2000 + trainers.length + 1}`;
@@ -1043,12 +1060,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setUsers((prev) => [...prev, newUser]);
 
+    // Write to Firestore cloud database
+    setDocument('trainers', newTrainer.id, newTrainer);
+    setDocument('users', newUser.id, newUser);
+
     logAudit('CREATE_TRAINER', `Added new trainer ${trainerData.fullName} (${id})`);
     return newTrainer;
   };
 
   const updateTrainer = (id: string, updates: Partial<Trainer>) => {
-    setTrainers((prev) => prev.map((t) => (t.id === id ? { ...t, ...updates } : t)));
+    setTrainers((prev) =>
+      prev.map((t) => {
+        if (t.id === id) {
+          const updated = { ...t, ...updates };
+          setDocument('trainers', id, updated);
+          return updated;
+        }
+        return t;
+      })
+    );
     logAudit('UPDATE_TRAINER', `Updated trainer record for ${id}`);
   };
 
@@ -1062,6 +1092,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return [...prev, pkg];
     });
+    setDocument('packageDefinitions', pkg.id, pkg);
     logAudit('SAVE_PACKAGE_DEF', `Saved package definition ${pkg.name} - AED ${pkg.priceAED}`);
   };
 
@@ -1133,6 +1164,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
     };
     setPayments((prev) => [newPayment, ...prev]);
+    setDocument('payments', newPayment.id, newPayment);
 
     // Create subscription record if recurring (Strictly 1 Active Subscription per Client Account)
     if (isRecurring && subRef) {
@@ -1141,7 +1173,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setSubscriptions((prev) => {
         // Cancel all existing active/pending subscriptions for this specific client
-        const updated = prev.map((s) => (s.clientId === clientId && (s.status === 'Active' || s.status === 'Pending') ? { ...s, status: 'Cancelled' as const } : s));
+        const updated = prev.map((s) => {
+          if (s.clientId === clientId && (s.status === 'Active' || s.status === 'Pending')) {
+            updateDocument('subscriptions', s.id, { status: 'Cancelled' as const });
+            return { ...s, status: 'Cancelled' as const };
+          }
+          return s;
+        });
 
         const newSub: SubscriptionRecord = {
           id: subRef,
@@ -1161,11 +1199,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           createdAt: new Date().toISOString(),
         };
 
+        setDocument('subscriptions', newSub.id, newSub);
         return [newSub, ...updated];
       });
 
       if (effectiveCustomerId && (!client.stripeCustomerId || client.stripeCustomerId !== effectiveCustomerId)) {
         setClients((prev) => prev.map((c) => (c.id === clientId ? { ...c, stripeCustomerId: effectiveCustomerId } : c)));
+        updateDocument('clients', clientId, { stripeCustomerId: effectiveCustomerId });
       }
     }
 
@@ -1194,15 +1234,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Enforce strictly 1 Active package per client account
       const updatedPrev = prev.map((p) => {
         if (p.clientId === clientId && p.status === 'Active') {
+          const supersededStatus = (p.remainingSessions === 0 ? 'Completed' : 'Expired') as 'Completed' | 'Expired';
+          updateDocument('clientPackages', p.id, { status: supersededStatus });
           return {
             ...p,
-            status: (p.remainingSessions === 0 ? 'Completed' : 'Expired') as 'Completed' | 'Expired',
+            status: supersededStatus,
           };
         }
         return p;
       });
       return [newClientPackage, ...updatedPrev];
     });
+    setDocument('clientPackages', newClientPackage.id, newClientPackage);
 
     // Create transaction ledger entry
     const newTxn: SessionTransaction = {
@@ -1219,6 +1262,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       responsibleRole: currentUser?.role || 'client',
     };
     setTransactions((prev) => [newTxn, ...prev]);
+    setDocument('transactions', newTxn.id, newTxn);
 
     logAudit(
       'PACKAGE_PURCHASED',
@@ -1285,6 +1329,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setPayments((prev) => [newPayment, ...prev]);
     setClientPackages((prev) => [newClientPackage, ...prev]);
+    setDocument('payments', newPayment.id, newPayment);
+    setDocument('clientPackages', newClientPackage.id, newClientPackage);
 
     // Create notification for Client
     const clientUser = users.find((u) => u.associatedId === clientId || u.email.toLowerCase() === client.email.toLowerCase());
@@ -1299,6 +1345,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         timestamp: new Date().toISOString(),
       };
       setNotifications((prev) => [notif, ...prev]);
+      setDocument('notifications', notif.id, notif);
     }
 
     logAudit(
@@ -1347,7 +1394,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPayments((prev) =>
       prev.map((p) => {
         if (p.packageId === packageId || p.id === pkg.paymentReference) {
-          return {
+          const updatedPay: PaymentRecord = {
             ...p,
             status: 'Paid',
             amountPaidAED: p.amountAED,
@@ -1355,6 +1402,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             paymentDate: startDate,
             transactionReference: customStripeChargeId || `tx_card_${Date.now()}_${cardDetails.last4}`,
           };
+          setDocument('payments', p.id, updatedPay);
+          return updatedPay;
         }
         return p;
       })
@@ -1364,19 +1413,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setClientPackages((prev) =>
       prev.map((p) => {
         if (p.id === packageId) {
-          return {
+          const updatedPkg: ClientPackage = {
             ...p,
             status: 'Active',
             startDate,
             expiryDate,
             remainingSessions: p.totalSessions,
           };
+          setDocument('clientPackages', p.id, updatedPkg);
+          return updatedPkg;
         }
         // Enforce strictly 1 Active package per client
         if (p.clientId === pkg.clientId && p.status === 'Active') {
+          const supersededStatus = (p.remainingSessions === 0 ? 'Completed' : 'Expired') as 'Completed' | 'Expired';
+          updateDocument('clientPackages', p.id, { status: supersededStatus });
           return {
             ...p,
-            status: (p.remainingSessions === 0 ? 'Completed' : 'Expired') as 'Completed' | 'Expired',
+            status: supersededStatus,
           };
         }
         return p;
@@ -1404,6 +1457,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           authorizationConsentGiven: true,
           createdAt: new Date().toISOString(),
         };
+        setDocument('subscriptions', newSub.id, newSub);
         return [newSub, ...otherSubs];
       });
     }
@@ -1423,6 +1477,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       responsibleRole: currentUser?.role || 'client',
     };
     setTransactions((prev) => [newTxn, ...prev]);
+    setDocument('transactions', newTxn.id, newTxn);
 
     // Client notification
     const clientUser = users.find((u) => u.associatedId === client.id || u.email.toLowerCase() === client.email.toLowerCase());
@@ -1437,6 +1492,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         timestamp: new Date().toISOString(),
       };
       setNotifications((prev) => [notif, ...prev]);
+      setDocument('notifications', notif.id, notif);
     }
 
     logAudit(
@@ -1527,6 +1583,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setBookings((prev) => [newBooking, ...prev]);
+    setDocument('bookings', newBooking.id, newBooking);
 
     // Generate automatic WhatsApp booking notification dispatch
     const targetClient = clients.find((c) => c.id === clientId);
@@ -1551,6 +1608,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           actionUrl: waUrl,
         };
         setNotifications((prev) => [notif, ...prev]);
+        setDocument('notifications', notif.id, notif);
       }
       logAudit(
         'WHATSAPP_BOOKING_NOTIFICATION_DISPATCHED',
@@ -1597,6 +1655,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const prevBalance = pkg.remainingSessions;
     const newBalance = Math.max(0, prevBalance - 1);
+    const newCompleted = pkg.completedSessions + 1;
+    const newPkgStatus = newBalance === 0 ? 'Completed' : pkg.status;
 
     // Update package counters
     setClientPackages((prev) =>
@@ -1604,15 +1664,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         p.id === pkg.id
           ? {
               ...p,
-              completedSessions: p.completedSessions + 1,
+              completedSessions: newCompleted,
               remainingSessions: newBalance,
-              status: newBalance === 0 ? 'Completed' : p.status,
+              status: newPkgStatus,
             }
           : p
       )
     );
+    updateDocument('clientPackages', pkg.id, {
+      completedSessions: newCompleted,
+      remainingSessions: newBalance,
+      status: newPkgStatus,
+    });
 
     // Update booking status
+    const completedAtStr = new Date().toISOString();
     setBookings((prev) =>
       prev.map((b) =>
         b.id === bookingId
@@ -1620,11 +1686,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ...b,
               status: 'Completed',
               workoutNotes: workoutNotes || b.workoutNotes,
-              completedAt: new Date().toISOString(),
+              completedAt: completedAtStr,
             }
           : b
       )
     );
+    updateDocument('bookings', bookingId, {
+      status: 'Completed',
+      workoutNotes: workoutNotes || booking.workoutNotes,
+      completedAt: completedAtStr,
+    });
 
     // Ledger transaction
     const newTxn: SessionTransaction = {
@@ -1642,6 +1713,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       responsibleRole: currentUser?.role || 'trainer',
     };
     setTransactions((prev) => [newTxn, ...prev]);
+    setDocument('transactions', newTxn.id, newTxn);
 
     logAudit('SESSION_COMPLETED', `Marked session ${bookingId} as Completed. Remaining credits: ${newBalance}`);
 
@@ -1662,6 +1734,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Session booking not found.' };
     }
 
+    const reviewedAtStr = new Date().toISOString();
     setBookings((prev) =>
       prev.map((b) =>
         b.id === bookingId
@@ -1670,11 +1743,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               trainerRating,
               sessionRating,
               clientReview,
-              reviewedAt: new Date().toISOString(),
+              reviewedAt: reviewedAtStr,
             }
           : b
       )
     );
+    updateDocument('bookings', bookingId, {
+      trainerRating,
+      sessionRating,
+      clientReview,
+      reviewedAt: reviewedAtStr,
+    });
 
     logAudit(
       'SESSION_REVIEWED',
@@ -1702,9 +1781,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const { isEligibleForRefund, hoursDiff } = evaluateCancellationPolicy(booking.sessionDate, booking.startTime);
 
     if (isEligibleForRefund) {
-      // Cancelled >= 12 hours before -> Refund 1 credit (or keep remaining intact if not pre-deducted)
-      // Since remaining credit is only consumed on session completion, for a scheduled booking,
-      // refund means keeping credit available or incrementing refunded counter.
+      // Cancelled >= 12 hours before -> Refund 1 credit (keep remaining intact)
       setClientPackages((prev) =>
         prev.map((p) =>
           p.id === pkg.id
@@ -1715,7 +1792,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             : p
         )
       );
+      updateDocument('clientPackages', pkg.id, { refundedSessions: pkg.refundedSessions + 1 });
 
+      const cancelledAtStr = new Date().toISOString();
       setBookings((prev) =>
         prev.map((b) =>
           b.id === bookingId
@@ -1723,13 +1802,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 ...b,
                 status: 'Cancelled by Client',
                 cancellationReason: reason,
-                cancelledAt: new Date().toISOString(),
+                cancelledAt: cancelledAtStr,
                 cancelledBy: 'client',
                 creditImpact: 'refunded',
               }
             : b
         )
       );
+      updateDocument('bookings', bookingId, {
+        status: 'Cancelled by Client',
+        cancellationReason: reason,
+        cancelledAt: cancelledAtStr,
+        cancelledBy: 'client',
+        creditImpact: 'refunded',
+      });
 
       const newTxn: SessionTransaction = {
         id: `TXN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -1738,7 +1824,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sessionId: bookingId,
         timestamp: new Date().toISOString(),
         type: 'ON_TIME_CANCELLATION_REFUND',
-        creditChange: 0, // No credit lost
+        creditChange: 0,
         previousBalance: pkg.remainingSessions,
         newBalance: pkg.remainingSessions,
         reason: `Cancelled ${hoursDiff.toFixed(1)}h before session (>=12h rule). 1 Session credit retained/refunded.`,
@@ -1746,6 +1832,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         responsibleRole: 'client',
       };
       setTransactions((prev) => [newTxn, ...prev]);
+      setDocument('transactions', newTxn.id, newTxn);
 
       logAudit('CLIENT_CANCELLATION_ON_TIME', `Client cancelled session ${bookingId} ${hoursDiff.toFixed(1)}h ahead. Credit refunded.`);
 
@@ -1758,20 +1845,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Cancelled < 12 hours before -> Late Cancellation -> Deduct 1 credit permanently
       const prevBal = pkg.remainingSessions;
       const newBal = Math.max(0, prevBal - 1);
+      const newLateCount = pkg.lateCancellationDeductions + 1;
+      const newPkgStatus = newBal === 0 ? 'Completed' : pkg.status;
 
       setClientPackages((prev) =>
         prev.map((p) =>
           p.id === pkg.id
             ? {
                 ...p,
-                lateCancellationDeductions: p.lateCancellationDeductions + 1,
+                lateCancellationDeductions: newLateCount,
                 remainingSessions: newBal,
-                status: newBal === 0 ? 'Completed' : p.status,
+                status: newPkgStatus,
               }
             : p
         )
       );
+      updateDocument('clientPackages', pkg.id, {
+        lateCancellationDeductions: newLateCount,
+        remainingSessions: newBal,
+        status: newPkgStatus,
+      });
 
+      const cancelledAtStr = new Date().toISOString();
       setBookings((prev) =>
         prev.map((b) =>
           b.id === bookingId
@@ -1779,13 +1874,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 ...b,
                 status: 'Late Cancellation',
                 cancellationReason: reason,
-                cancelledAt: new Date().toISOString(),
+                cancelledAt: cancelledAtStr,
                 cancelledBy: 'client',
                 creditImpact: 'deducted',
               }
             : b
         )
       );
+      updateDocument('bookings', bookingId, {
+        status: 'Late Cancellation',
+        cancellationReason: reason,
+        cancelledAt: cancelledAtStr,
+        cancelledBy: 'client',
+        creditImpact: 'deducted',
+      });
 
       const newTxn: SessionTransaction = {
         id: `TXN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -1802,6 +1904,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         responsibleRole: 'client',
       };
       setTransactions((prev) => [newTxn, ...prev]);
+      setDocument('transactions', newTxn.id, newTxn);
 
       logAudit('CLIENT_CANCELLATION_LATE', `Client cancelled session ${bookingId} ${hoursDiff.toFixed(1)}h ahead (<12h rule). 1 credit deducted.`);
 
@@ -1818,6 +1921,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const booking = bookings.find((b) => b.id === bookingId);
     if (!booking) return;
 
+    const cancelledAtStr = new Date().toISOString();
     setBookings((prev) =>
       prev.map((b) =>
         b.id === bookingId
@@ -1825,19 +1929,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ...b,
               status: 'Cancelled by Trainer',
               cancellationReason: reason,
-              cancelledAt: new Date().toISOString(),
+              cancelledAt: cancelledAtStr,
               cancelledBy: 'trainer',
               creditImpact: 'refunded',
             }
           : b
       )
     );
+    updateDocument('bookings', bookingId, {
+      status: 'Cancelled by Trainer',
+      cancellationReason: reason,
+      cancelledAt: cancelledAtStr,
+      cancelledBy: 'trainer',
+      creditImpact: 'refunded',
+    });
 
     const pkg = clientPackages.find((p) => p.id === booking.packageId);
     if (pkg) {
       setClientPackages((prev) =>
         prev.map((p) => (p.id === pkg.id ? { ...p, refundedSessions: p.refundedSessions + 1 } : p))
       );
+      updateDocument('clientPackages', pkg.id, { refundedSessions: pkg.refundedSessions + 1 });
 
       const newTxn: SessionTransaction = {
         id: `TXN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -1854,6 +1966,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         responsibleRole: 'trainer',
       };
       setTransactions((prev) => [newTxn, ...prev]);
+      setDocument('transactions', newTxn.id, newTxn);
     }
 
     logAudit('TRAINER_CANCELLATION', `Trainer cancelled session ${bookingId}. Reason: ${reason || 'N/A'}`);
@@ -1867,21 +1980,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const pkg = clientPackages.find((p) => p.id === booking.packageId);
     if (!pkg) return;
 
+    const cancelledAtStr = new Date().toISOString();
+
     if (action === 'deduct') {
       const prevBal = pkg.remainingSessions;
       const newBal = Math.max(0, prevBal - 1);
+      const newLateCount = pkg.lateCancellationDeductions + 1;
 
       setClientPackages((prev) =>
         prev.map((p) =>
           p.id === pkg.id
             ? {
                 ...p,
-                lateCancellationDeductions: p.lateCancellationDeductions + 1,
+                lateCancellationDeductions: newLateCount,
                 remainingSessions: newBal,
               }
             : p
         )
       );
+      updateDocument('clientPackages', pkg.id, {
+        lateCancellationDeductions: newLateCount,
+        remainingSessions: newBal,
+      });
 
       setBookings((prev) =>
         prev.map((b) =>
@@ -1890,13 +2010,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 ...b,
                 status: 'Late Cancellation',
                 cancellationReason: reason,
-                cancelledAt: new Date().toISOString(),
+                cancelledAt: cancelledAtStr,
                 cancelledBy: 'admin',
                 creditImpact: 'deducted',
               }
             : b
         )
       );
+      updateDocument('bookings', bookingId, {
+        status: 'Late Cancellation',
+        cancellationReason: reason,
+        cancelledAt: cancelledAtStr,
+        cancelledBy: 'admin',
+        creditImpact: 'deducted',
+      });
 
       const newTxn: SessionTransaction = {
         id: `TXN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -1913,10 +2040,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         responsibleRole: 'admin',
       };
       setTransactions((prev) => [newTxn, ...prev]);
+      setDocument('transactions', newTxn.id, newTxn);
     } else {
       setClientPackages((prev) =>
         prev.map((p) => (p.id === pkg.id ? { ...p, refundedSessions: p.refundedSessions + 1 } : p))
       );
+      updateDocument('clientPackages', pkg.id, { refundedSessions: pkg.refundedSessions + 1 });
 
       setBookings((prev) =>
         prev.map((b) =>
@@ -1925,13 +2054,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 ...b,
                 status: 'Cancelled by Client',
                 cancellationReason: reason,
-                cancelledAt: new Date().toISOString(),
+                cancelledAt: cancelledAtStr,
                 cancelledBy: 'admin',
                 creditImpact: 'refunded',
               }
             : b
         )
       );
+      updateDocument('bookings', bookingId, {
+        status: 'Cancelled by Client',
+        cancellationReason: reason,
+        cancelledAt: cancelledAtStr,
+        cancelledBy: 'admin',
+        creditImpact: 'refunded',
+      });
 
       const newTxn: SessionTransaction = {
         id: `TXN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -1948,6 +2084,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         responsibleRole: 'admin',
       };
       setTransactions((prev) => [newTxn, ...prev]);
+      setDocument('transactions', newTxn.id, newTxn);
     }
 
     logAudit('ADMIN_CANCELLATION', `Admin cancelled session ${bookingId} (${action.toUpperCase()}). Reason: ${reason}`);
@@ -1962,18 +2099,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const prevBal = pkg.remainingSessions;
     const newBal = Math.max(0, prevBal - 1);
+    const newNoShowCount = pkg.noShowDeductions + 1;
 
     setClientPackages((prev) =>
       prev.map((p) =>
         p.id === pkg.id
           ? {
               ...p,
-              noShowDeductions: p.noShowDeductions + 1,
+              noShowDeductions: newNoShowCount,
               remainingSessions: newBal,
             }
           : p
       )
     );
+    updateDocument('clientPackages', pkg.id, {
+      noShowDeductions: newNoShowCount,
+      remainingSessions: newBal,
+    });
 
     setBookings((prev) =>
       prev.map((b) =>
@@ -1986,6 +2128,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : b
       )
     );
+    updateDocument('bookings', bookingId, {
+      status: 'No Show',
+      creditImpact: 'deducted',
+    });
 
     const newTxn: SessionTransaction = {
       id: `TXN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -2002,6 +2148,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       responsibleRole: currentUser?.role || 'trainer',
     };
     setTransactions((prev) => [newTxn, ...prev]);
+    setDocument('transactions', newTxn.id, newTxn);
 
     logAudit('NO_SHOW_RECORDED', `No show recorded for session ${bookingId}`);
   };
@@ -2046,6 +2193,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : b
       )
     );
+    updateDocument('bookings', bookingId, {
+      sessionDate: newDate,
+      startTime: newStartTime,
+      endTime: newEndTime,
+      status: 'Rescheduled',
+    });
 
     logAudit('RESCHEDULE_SESSION', `Rescheduled session ${bookingId} to ${newDate} ${newStartTime}`);
     return { success: true, message: 'Session rescheduled successfully!' };
@@ -2056,14 +2209,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const pkg = clientPackages.find((p) => p.id === packageId);
     if (!pkg) return;
 
+    let restoredSessions = pkg.remainingSessions;
+    if (pkg.remainingSessions === 0 && pkg.expiredSessions > 0) {
+      restoredSessions = pkg.expiredSessions;
+    }
+
     setClientPackages((prev) => {
       const targetPkg = prev.find((p) => p.id === packageId);
       if (!targetPkg) return prev;
 
       return prev.map((p) => {
         if (p.id === packageId) {
-          const restoredSessions = p.remainingSessions === 0 && p.expiredSessions > 0 ? p.expiredSessions : p.remainingSessions;
-          return {
+          const updatedPkg = {
             ...p,
             originalExpiryDate: p.originalExpiryDate || p.expiryDate,
             expiryDate: newExpiryDate,
@@ -2072,14 +2229,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             extendedAt: new Date().toISOString(),
             remainingSessions: restoredSessions,
             expiredSessions: p.remainingSessions === 0 && p.expiredSessions > 0 ? 0 : p.expiredSessions,
-            status: restoredSessions > 0 ? 'Active' : p.status,
+            status: (restoredSessions > 0 ? 'Active' : p.status) as ClientPackageStatus,
           };
+          updateDocument('clientPackages', p.id, updatedPkg);
+          return updatedPkg;
         }
         // Enforce strictly 1 active package per client
         if (targetPkg && p.clientId === targetPkg.clientId && p.status === 'Active') {
+          const supersededStatus = (p.remainingSessions === 0 ? 'Completed' : 'Expired') as 'Completed' | 'Expired';
+          updateDocument('clientPackages', p.id, { status: supersededStatus });
           return {
             ...p,
-            status: (p.remainingSessions === 0 ? 'Completed' : 'Expired') as 'Completed' | 'Expired',
+            status: supersededStatus,
           };
         }
         return p;
@@ -2088,11 +2249,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Synchronize client's active recurring subscription so nextPaymentDate matches the adjusted validity date
     setSubscriptions((prevSubs) =>
-      prevSubs.map((sub) =>
-        sub.clientId === pkg.clientId && sub.status === 'Active'
-          ? { ...sub, nextPaymentDate: newExpiryDate }
-          : sub
-      )
+      prevSubs.map((sub) => {
+        if (sub.clientId === pkg.clientId && sub.status === 'Active') {
+          updateDocument('subscriptions', sub.id, { nextPaymentDate: newExpiryDate });
+          return { ...sub, nextPaymentDate: newExpiryDate };
+        }
+        return sub;
+      })
     );
 
     logAudit(
@@ -2116,6 +2279,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const prevBal = pkg.remainingSessions;
     const newBal = Math.max(0, prevBal + creditDelta);
+    const updatedStatus = (newBal > 0 && pkg.status === 'Completed' ? 'Active' : pkg.status) as ClientPackageStatus;
 
     setClientPackages((prev) =>
       prev.map((p) =>
@@ -2123,11 +2287,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? {
               ...p,
               remainingSessions: newBal,
-              status: newBal > 0 && p.status === 'Completed' ? 'Active' : p.status,
+              status: updatedStatus,
             }
           : p
       )
     );
+    updateDocument('clientPackages', packageId, {
+      remainingSessions: newBal,
+      status: updatedStatus,
+    });
 
     const newTxn: SessionTransaction = {
       id: `TXN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -2143,6 +2311,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       responsibleRole: 'admin',
     };
     setTransactions((prev) => [newTxn, ...prev]);
+    setDocument('transactions', newTxn.id, newTxn);
 
     logAudit(
       'MANUAL_CREDIT_ADJUSTMENT',
@@ -2153,11 +2322,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Subscription management
   const cancelSubscription = (subscriptionId: string) => {
     setSubscriptions((prev) => prev.map((s) => (s.id === subscriptionId ? { ...s, status: 'Cancelled' } : s)));
+    updateDocument('subscriptions', subscriptionId, { status: 'Cancelled' });
     logAudit('CANCEL_SUBSCRIPTION', `Subscription ${subscriptionId} cancelled. Future recurring charges stopped.`);
   };
 
   const pauseSubscription = (subscriptionId: string) => {
     setSubscriptions((prev) => prev.map((s) => (s.id === subscriptionId ? { ...s, status: 'Pending' } : s)));
+    updateDocument('subscriptions', subscriptionId, { status: 'Pending' });
     logAudit('PAUSE_SUBSCRIPTION', `Subscription ${subscriptionId} paused.`);
   };
 
@@ -2168,9 +2339,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSubscriptions((prev) =>
       prev.map((s) => {
         if (s.id === subscriptionId) {
+          updateDocument('subscriptions', s.id, { status: 'Active' });
           return { ...s, status: 'Active' };
         }
         if (s.clientId === target.clientId && s.status === 'Active') {
+          updateDocument('subscriptions', s.id, { status: 'Cancelled' });
           return { ...s, status: 'Cancelled' };
         }
         return s;
@@ -2180,29 +2353,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateSettings = (newSettings: Partial<SystemSettings>) => {
-    setSettings((prev) => ({ ...prev, ...newSettings }));
+    setSettings((prev) => {
+      const merged = { ...prev, ...newSettings };
+      setDocument('settings', 'global', merged);
+      return merged;
+    });
     logAudit('UPDATE_SETTINGS', 'System settings updated.');
   };
 
   const markNotificationRead = (id: string) => {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+    updateDocument('notifications', id, { read: true });
   };
 
   const markAllNotificationsRead = () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    notifications.forEach((n) => updateDocument('notifications', n.id, { read: true }));
   };
 
   const deleteNotification = (id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
+    deleteDocument('notifications', id);
   };
 
   const clearAllNotifications = () => {
     setNotifications([]);
+    notifications.forEach((n) => deleteDocument('notifications', n.id));
   };
 
   // Slider Management (Admin Only)
   const updateSlide = (id: string, updates: Partial<DashboardSlide>) => {
     setSlides((prev) => prev.map((s) => (s.id === id ? { ...s, ...updates } : s)));
+    updateDocument('slides', id, updates);
     logAudit('UPDATE_SLIDER_SLIDE', `Admin updated slider slide [${id}]: ${updates.title || 'Modified'}`);
   };
 
@@ -2212,17 +2394,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `slide-${Date.now()}`,
     };
     setSlides((prev) => [...prev, newSlide]);
+    setDocument('slides', newSlide.id, newSlide);
     logAudit('ADD_SLIDER_SLIDE', `Admin created new slider slide: ${slideData.title}`);
     return newSlide;
   };
 
   const deleteSlide = (id: string) => {
     setSlides((prev) => prev.filter((s) => s.id !== id));
+    deleteDocument('slides', id);
     logAudit('DELETE_SLIDER_SLIDE', `Admin deleted slider slide: ${id}`);
   };
 
   const resetSlidesToDefault = () => {
     setSlides(initialSlides);
+    initialSlides.forEach((slide) => setDocument('slides', slide.id, slide));
     logAudit('RESET_SLIDER_SLIDES', 'Admin reset dashboard slider slides to factory defaults');
   };
 
@@ -2237,31 +2422,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 1. Update in users array
     setUsers((prev) =>
-      prev.map((u) =>
-        u.associatedId?.toLowerCase() === query ||
-        u.id.toLowerCase() === query ||
-        u.email.toLowerCase() === query
-          ? { ...u, password: cleanPass }
-          : u
-      )
+      prev.map((u) => {
+        if (
+          u.associatedId?.toLowerCase() === query ||
+          u.id.toLowerCase() === query ||
+          u.email.toLowerCase() === query
+        ) {
+          updateDocument('users', u.id, { password: cleanPass });
+          return { ...u, password: cleanPass };
+        }
+        return u;
+      })
     );
 
     // 2. Update in clients array if matching
     setClients((prev) =>
-      prev.map((c) =>
-        c.id.toLowerCase() === query || c.email.toLowerCase() === query
-          ? { ...c, password: cleanPass }
-          : c
-      )
+      prev.map((c) => {
+        if (c.id.toLowerCase() === query || c.email.toLowerCase() === query) {
+          updateDocument('clients', c.id, { password: cleanPass });
+          return { ...c, password: cleanPass };
+        }
+        return c;
+      })
     );
 
     // 3. Update in trainers array if matching
     setTrainers((prev) =>
-      prev.map((t) =>
-        t.id.toLowerCase() === query || t.email.toLowerCase() === query
-          ? { ...t, password: cleanPass }
-          : t
-      )
+      prev.map((t) => {
+        if (t.id.toLowerCase() === query || t.email.toLowerCase() === query) {
+          updateDocument('trainers', t.id, { password: cleanPass });
+          return { ...t, password: cleanPass };
+        }
+        return t;
+      })
     );
 
     logAudit(
@@ -2459,6 +2652,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
     };
     setPromoCodes((prev) => [newPromo, ...prev]);
+    setDocument('promoCodes', newPromo.id, newPromo);
     logAudit(
       'CREATE_PROMO_CODE',
       `Admin created promo code ${cleanCode} (${promoData.discountType === 'percentage' ? promoData.discountValue + '%' : promoData.discountValue + ' AED'} off, valid: ${promoData.validFrom} to ${promoData.validUntil})`
@@ -2475,6 +2669,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ...updates,
             code: updates.code ? updates.code.trim().toUpperCase() : p.code,
           };
+          updateDocument('promoCodes', id, updated);
           logAudit('UPDATE_PROMO_CODE', `Admin updated promo code ${updated.code} (valid: ${updated.validFrom} to ${updated.validUntil})`);
           return updated;
         }
@@ -2486,6 +2681,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deletePromoCode = (id: string) => {
     const target = promoCodes.find((p) => p.id === id);
     setPromoCodes((prev) => prev.filter((p) => p.id !== id));
+    deleteDocument('promoCodes', id);
     if (target) {
       logAudit('DELETE_PROMO_CODE', `Admin deleted promo code ${target.code}.`);
     }
@@ -2496,6 +2692,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       prev.map((p) => {
         if (p.id === id) {
           const nextStatus = p.status === 'Active' ? 'Inactive' : 'Active';
+          updateDocument('promoCodes', id, { status: nextStatus });
           logAudit('TOGGLE_PROMO_CODE', `Admin changed promo code ${p.code} status to ${nextStatus}.`);
           return { ...p, status: nextStatus };
         }
@@ -2607,10 +2804,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (p.code.toUpperCase() === cleanCode) {
           const nextUses = p.currentUses + 1;
           const isExpired = p.maxUses ? nextUses >= p.maxUses : false;
+          const nextStatus = isExpired ? 'Expired' : p.status;
+          updateDocument('promoCodes', p.id, {
+            currentUses: nextUses,
+            status: nextStatus,
+          });
           return {
             ...p,
             currentUses: nextUses,
-            status: isExpired ? 'Expired' : p.status,
+            status: nextStatus,
           };
         }
         return p;
@@ -2620,7 +2822,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const resetToCleanProductionData = () => {
     try {
-      localStorage.removeItem(LOCAL_STORAGE_KEY);
+      localStorage.removeItem('waiter_walk_ptms_clean_prod_v2');
       localStorage.removeItem('waiter_walk_ptms_state_v1');
     } catch (e) {
       // ignore

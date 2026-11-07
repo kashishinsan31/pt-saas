@@ -1,0 +1,366 @@
+{
+  "entities": {
+    "User": {
+      "description": "System user accounts for admins, trainers, and clients",
+      "properties": {
+        "id": { "type": "string", "description": "User identifier" },
+        "email": { "type": "string", "description": "User email address" },
+        "role": { "type": "string", "description": "User role: admin, trainer, client" },
+        "name": { "type": "string", "description": "User full name" },
+        "password": { "type": "string", "description": "Encrypted or stored credential" },
+        "avatarUrl": { "type": "string", "description": "Profile picture URL" },
+        "associatedId": { "type": "string", "description": "Associated clientId or trainerId" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of creation" }
+      },
+      "required": ["id", "email", "role", "name"]
+    },
+    "Client": {
+      "description": "Client profile records including contact, address, trainer assignment, and health data",
+      "properties": {
+        "id": { "type": "string", "description": "Unique client ID (e.g. WW-CL-1001)" },
+        "userId": { "type": "string", "description": "Optional user account ID" },
+        "fullName": { "type": "string", "description": "Client full name" },
+        "dateOfBirth": { "type": "string", "description": "Date of birth YYYY-MM-DD" },
+        "age": { "type": "number", "description": "Client age" },
+        "gender": { "type": "string", "description": "Gender" },
+        "email": { "type": "string", "description": "Email address" },
+        "whatsappNumber": { "type": "string", "description": "WhatsApp contact number" },
+        "residentialAddress": { "type": "string", "description": "Residential address" },
+        "communityName": { "type": "string", "description": "Dubai Community name" },
+        "assignedTrainerId": { "type": "string", "description": "Assigned trainer ID" },
+        "status": { "type": "string", "description": "Active, Inactive, Archived" },
+        "stripeCustomerId": { "type": "string", "description": "Stripe customer ID" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["id", "fullName", "email", "whatsappNumber", "assignedTrainerId", "status"]
+    },
+    "Trainer": {
+      "description": "Trainer profiles with specializations, contact info, and status",
+      "properties": {
+        "id": { "type": "string", "description": "Trainer ID (e.g. WW-TR-2001)" },
+        "fullName": { "type": "string", "description": "Trainer name" },
+        "email": { "type": "string", "description": "Trainer email" },
+        "whatsappNumber": { "type": "string", "description": "Trainer phone" },
+        "specialization": { "type": "string", "description": "Specializations" },
+        "employmentStatus": { "type": "string", "description": "Employment type" },
+        "status": { "type": "string", "description": "Active or Inactive" },
+        "bio": { "type": "string", "description": "Trainer biography" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["id", "fullName", "email", "whatsappNumber", "specialization", "status"]
+    },
+    "PackageDefinition": {
+      "description": "Package templates configured by admin",
+      "properties": {
+        "id": { "type": "string", "description": "Package template ID" },
+        "name": { "type": "string", "description": "Package title" },
+        "sessionCount": { "type": "number", "description": "Number of sessions" },
+        "priceAED": { "type": "number", "description": "Base price in AED" },
+        "validityDays": { "type": "number", "description": "Validity period in days" },
+        "sessionDurationMinutes": { "type": "number", "description": "Duration per session in minutes" },
+        "trainingFrequency": { "type": "string", "description": "e.g. 3x weekly" },
+        "description": { "type": "string", "description": "Package description" },
+        "status": { "type": "string", "description": "Active or Inactive" }
+      },
+      "required": ["id", "name", "sessionCount", "priceAED", "validityDays", "status"]
+    },
+    "ClientPackage": {
+      "description": "Active, pending, or past packages owned by a client with session balances",
+      "properties": {
+        "id": { "type": "string", "description": "Package instance ID" },
+        "clientId": { "type": "string", "description": "Client ID reference" },
+        "packageDefinitionId": { "type": "string", "description": "Package definition ID" },
+        "packageName": { "type": "string", "description": "Package name" },
+        "packagePriceAED": { "type": "number", "description": "Price paid in AED" },
+        "totalSessions": { "type": "number", "description": "Total sessions allocated" },
+        "completedSessions": { "type": "number", "description": "Completed session count" },
+        "refundedSessions": { "type": "number", "description": "Refunded session count" },
+        "lateCancellationDeductions": { "type": "number", "description": "Late cancellations" },
+        "noShowDeductions": { "type": "number", "description": "No shows" },
+        "expiredSessions": { "type": "number", "description": "Expired sessions" },
+        "remainingSessions": { "type": "number", "description": "Active remaining credits" },
+        "startDate": { "type": "string", "description": "Package start date" },
+        "expiryDate": { "type": "string", "description": "Package expiry date" },
+        "status": { "type": "string", "description": "Active, Pending Payment, Completed, Expired, Cancelled" },
+        "paymentReference": { "type": "string", "description": "Associated payment ID" },
+        "purchasedAt": { "type": "string", "description": "Purchase timestamp" }
+      },
+      "required": ["id", "clientId", "packageName", "totalSessions", "remainingSessions", "startDate", "expiryDate", "status"]
+    },
+    "SessionBooking": {
+      "description": "Individual training session booking records",
+      "properties": {
+        "id": { "type": "string", "description": "Booking ID" },
+        "clientId": { "type": "string", "description": "Client ID" },
+        "trainerId": { "type": "string", "description": "Trainer ID" },
+        "packageId": { "type": "string", "description": "Package ID" },
+        "sessionDate": { "type": "string", "description": "Date YYYY-MM-DD" },
+        "startTime": { "type": "string", "description": "Start time HH:mm" },
+        "endTime": { "type": "string", "description": "End time HH:mm" },
+        "durationMinutes": { "type": "number", "description": "Duration" },
+        "location": { "type": "string", "description": "Session location" },
+        "status": { "type": "string", "description": "Booking status" },
+        "notes": { "type": "string", "description": "Client or admin notes" },
+        "workoutNotes": { "type": "string", "description": "Trainer workout notes" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["id", "clientId", "trainerId", "packageId", "sessionDate", "startTime", "endTime", "status"]
+    },
+    "PaymentRecord": {
+      "description": "Payment transactions for package purchases and subscriptions",
+      "properties": {
+        "id": { "type": "string", "description": "Payment ID" },
+        "clientId": { "type": "string", "description": "Client ID" },
+        "packageId": { "type": "string", "description": "Package ID" },
+        "packageName": { "type": "string", "description": "Package name" },
+        "amountAED": { "type": "number", "description": "Total amount in AED" },
+        "amountPaidAED": { "type": "number", "description": "Amount paid" },
+        "outstandingBalanceAED": { "type": "number", "description": "Outstanding balance" },
+        "paymentDate": { "type": "string", "description": "Date of payment" },
+        "paymentMethod": { "type": "string", "description": "Payment method: Stripe, Card, Cash, Bank Transfer" },
+        "transactionReference": { "type": "string", "description": "Reference / Receipt number" },
+        "status": { "type": "string", "description": "Paid, Partially Paid, Pending, Failed, Refunded" },
+        "stripePaymentIntentId": { "type": "string", "description": "Stripe Payment Intent ID" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["id", "clientId", "amountAED", "paymentDate", "paymentMethod", "status"]
+    },
+    "SubscriptionRecord": {
+      "description": "Recurring auto-pay subscriptions for automated deductions",
+      "properties": {
+        "id": { "type": "string", "description": "Subscription ID" },
+        "clientId": { "type": "string", "description": "Client ID" },
+        "packageDefinitionId": { "type": "string", "description": "Package definition ID" },
+        "packageName": { "type": "string", "description": "Package name" },
+        "amountAED": { "type": "number", "description": "Recurring monthly amount" },
+        "cardBrand": { "type": "string", "description": "Card brand" },
+        "last4Digits": { "type": "string", "description": "Last 4 digits" },
+        "startDate": { "type": "string", "description": "Start date" },
+        "nextPaymentDate": { "type": "string", "description": "Next scheduled auto-deduction date" },
+        "status": { "type": "string", "description": "Active, Pending, Payment Failed, Past Due, Cancelled" },
+        "stripeCustomerId": { "type": "string", "description": "Stripe customer ID" },
+        "authorizationConsentGiven": { "type": "boolean", "description": "Auto-deduction consent flag" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["id", "clientId", "packageName", "amountAED", "nextPaymentDate", "status"]
+    },
+    "SavedCard": {
+      "description": "Vaulted customer payment methods for auto-pay and seamless renewals",
+      "properties": {
+        "id": { "type": "string", "description": "Card ID" },
+        "clientId": { "type": "string", "description": "Client ID" },
+        "cardHolder": { "type": "string", "description": "Name on card" },
+        "brand": { "type": "string", "description": "Card brand" },
+        "last4": { "type": "string", "description": "Last 4 digits" },
+        "expiryMonth": { "type": "string", "description": "Expiry month" },
+        "expiryYear": { "type": "string", "description": "Expiry year" },
+        "isDefault": { "type": "boolean", "description": "Is default payment method" },
+        "stripeCustomerId": { "type": "string", "description": "Stripe customer reference" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["id", "clientId", "cardHolder", "brand", "last4", "expiryMonth", "expiryYear"]
+    },
+    "SessionTransaction": {
+      "description": "Immutable ledger tracking credit additions, deductions, refunds, and adjustments",
+      "properties": {
+        "id": { "type": "string", "description": "Transaction ID" },
+        "clientId": { "type": "string", "description": "Client ID" },
+        "packageId": { "type": "string", "description": "Package ID" },
+        "timestamp": { "type": "string", "description": "Dubai ISO timestamp" },
+        "type": { "type": "string", "description": "Transaction type" },
+        "creditChange": { "type": "number", "description": "Credit adjustment amount" },
+        "previousBalance": { "type": "number", "description": "Balance before transaction" },
+        "newBalance": { "type": "number", "description": "Balance after transaction" },
+        "reason": { "type": "string", "description": "Reason for transaction" },
+        "responsibleUserId": { "type": "string", "description": "Actor user ID" },
+        "responsibleRole": { "type": "string", "description": "Actor role" }
+      },
+      "required": ["id", "clientId", "packageId", "timestamp", "type", "creditChange", "newBalance"]
+    },
+    "PromoCode": {
+      "description": "Discount promo codes for packages",
+      "properties": {
+        "id": { "type": "string", "description": "Promo code ID" },
+        "code": { "type": "string", "description": "Promo code text" },
+        "discountType": { "type": "string", "description": "percentage or fixed" },
+        "discountValue": { "type": "number", "description": "Discount value" },
+        "validFrom": { "type": "string", "description": "Start date" },
+        "validUntil": { "type": "string", "description": "End date" },
+        "currentUses": { "type": "number", "description": "Current redemption count" },
+        "status": { "type": "string", "description": "Active, Inactive, Expired" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["id", "code", "discountType", "discountValue", "status"]
+    },
+    "SystemSettings": {
+      "description": "System-wide settings and integrations",
+      "properties": {
+        "companyName": { "type": "string", "description": "Company name" },
+        "currency": { "type": "string", "description": "Currency AED" },
+        "timezone": { "type": "string", "description": "Asia/Dubai" },
+        "stripeMode": { "type": "string", "description": "test or live" },
+        "defaultPackageValidityDays": { "type": "number", "description": "Validity days default" },
+        "cancellationThresholdHours": { "type": "number", "description": "Cancellation policy hours" }
+      },
+      "required": ["companyName", "currency", "timezone"]
+    },
+    "DashboardSlide": {
+      "description": "Promotional and announcement slides for the dashboard",
+      "properties": {
+        "id": { "type": "string", "description": "Slide ID" },
+        "title": { "type": "string", "description": "Title" },
+        "subtitle": { "type": "string", "description": "Subtitle" },
+        "description": { "type": "string", "description": "Description" },
+        "actionText": { "type": "string", "description": "Action button text" }
+      },
+      "required": ["id", "title"]
+    },
+    "NotificationItem": {
+      "description": "In-app notifications for users",
+      "properties": {
+        "id": { "type": "string", "description": "Notification ID" },
+        "userId": { "type": "string", "description": "Recipient user ID" },
+        "title": { "type": "string", "description": "Title" },
+        "message": { "type": "string", "description": "Message" },
+        "type": { "type": "string", "description": "Notification category" },
+        "read": { "type": "boolean", "description": "Read status" },
+        "timestamp": { "type": "string", "description": "Timestamp" }
+      },
+      "required": ["id", "userId", "title", "message", "read"]
+    },
+    "AuditLogItem": {
+      "description": "System audit trail records",
+      "properties": {
+        "id": { "type": "string", "description": "Audit log ID" },
+        "timestamp": { "type": "string", "description": "Timestamp" },
+        "userId": { "type": "string", "description": "Actor user ID" },
+        "userName": { "type": "string", "description": "Actor name" },
+        "action": { "type": "string", "description": "Action" },
+        "details": { "type": "string", "description": "Details" }
+      },
+      "required": ["id", "timestamp", "userId", "action"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "entity": "User",
+      "description": "User login accounts and profiles",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/clients/{clientId}": {
+      "entity": "Client",
+      "description": "Client demographic and training records",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/trainers/{trainerId}": {
+      "entity": "Trainer",
+      "description": "Trainer profiles and status",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/packageDefinitions/{pkgDefId}": {
+      "entity": "PackageDefinition",
+      "description": "Available packages catalog",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/clientPackages/{pkgId}": {
+      "entity": "ClientPackage",
+      "description": "Purchased client packages and session balances",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/bookings/{bookingId}": {
+      "entity": "SessionBooking",
+      "description": "Session bookings and attendance",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/payments/{paymentId}": {
+      "entity": "PaymentRecord",
+      "description": "Payment records and receipts",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/subscriptions/{subId}": {
+      "entity": "SubscriptionRecord",
+      "description": "Recurring auto-pay subscriptions",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/savedCards/{cardId}": {
+      "entity": "SavedCard",
+      "description": "Vaulted customer payment methods",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/transactions/{txnId}": {
+      "entity": "SessionTransaction",
+      "description": "Session credit balance adjustments ledger",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/promoCodes/{promoId}": {
+      "entity": "PromoCode",
+      "description": "Discount promo codes",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/settings/{settingId}": {
+      "entity": "SystemSettings",
+      "description": "Application settings and configurations",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/slides/{slideId}": {
+      "entity": "DashboardSlide",
+      "description": "Dashboard slider banners",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/notifications/{notifId}": {
+      "entity": "NotificationItem",
+      "description": "Notification items for clients and admins",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "/auditLogs/{logId}": {
+      "entity": "AuditLogItem",
+      "description": "Audit logs for security and compliance",
+      "allow": {
+        "read": "true",
+        "write": "true"
+      }
+    }
+  }
+}
