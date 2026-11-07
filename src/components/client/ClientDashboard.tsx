@@ -65,8 +65,30 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
   } = useApp();
 
   const clientId = currentUser?.associatedId || 'WW-CL-1001';
-  const client = clients.find((c) => c.id === clientId) || clients[0];
-  const trainer = trainers.find((t) => t.id === client.assignedTrainerId);
+
+  const fallbackClient: any = {
+    id: clientId,
+    fullName: currentUser?.name || 'Valued Client',
+    email: currentUser?.email || 'client@waiterwalk.ae',
+    whatsappNumber: '+971 50 000 0000',
+    dateOfBirth: '1995-01-01',
+    age: 30,
+    gender: 'Prefer not to say',
+    residentialAddress: 'Dubai, UAE',
+    communityName: 'Dubai Marina',
+    assignedTrainerId: trainers[0]?.id || 'WW-TR-2001',
+    emergencyContact: { name: 'Emergency Contact', relationship: 'Family', phone: '+971 50 000 0000' },
+    status: 'Active',
+    createdAt: new Date().toISOString(),
+  };
+
+  const client =
+    clients.find((c) => c.id === clientId) ||
+    clients.find((c) => c.email.toLowerCase() === (currentUser?.email || '').toLowerCase()) ||
+    clients[0] ||
+    fallbackClient;
+
+  const trainer = trainers.find((t) => t.id === client?.assignedTrainerId) || trainers[0];
 
   const [activeTab, setActiveTab] = useState<'overview' | 'sessions' | 'payments' | 'subscriptions' | 'health'>('overview');
   const [isHealthModalOpen, setIsHealthModalOpen] = useState(false);
@@ -95,7 +117,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
   const [isPayPendingModalOpen, setIsPayPendingModalOpen] = useState(false);
   const [selectedPendingPkg, setSelectedPendingPkg] = useState<any>(null);
   const [selectedPendingSavedCardId, setSelectedPendingSavedCardId] = useState<string>('NEW_CARD');
-  const [payCardHolder, setPayCardHolder] = useState(client.fullName);
+  const [payCardHolder, setPayCardHolder] = useState(client?.fullName || currentUser?.name || 'Valued Client');
   const [paySaveDefaultCard, setPaySaveDefaultCard] = useState(true);
   const [payAgreeTerms, setPayAgreeTerms] = useState(false);
   const [payFeedbackMsg, setPayFeedbackMsg] = useState('');
@@ -108,7 +130,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
 
   // Add Card Stripe Elements & Modal state
   const [isAddCardModalOpen, setIsAddCardModalOpen] = useState(false);
-  const [cardHolderName, setCardHolderName] = useState(client.fullName);
+  const [cardHolderName, setCardHolderName] = useState(client?.fullName || currentUser?.name || 'Valued Client');
   const [makeDefault, setMakeDefault] = useState(true);
   const [agreeTermsAddCard, setAgreeTermsAddCard] = useState(false);
   const [addCardError, setAddCardError] = useState('');

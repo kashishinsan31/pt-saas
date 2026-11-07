@@ -22,7 +22,13 @@ export const SessionCreditsModule: React.FC = () => {
   const [validityFeedback, setValidityFeedback] = useState<string>('');
 
   // Selected client object & active package
-  const currentClient = clients.find((c) => c.id === selectedClientId) || clients[0];
+  const currentClient = clients.find((c) => c.id === selectedClientId) || clients[0] || {
+    id: selectedClientId || 'WW-CL-1001',
+    fullName: 'Client Profile',
+    email: 'client@waiterwalk.ae',
+    whatsappNumber: '+971 50 000 0000',
+    assignedTrainerId: 'WW-TR-2001',
+  };
   
   // Find client's active package or most recent package
   const clientPackagesList = clientPackages.filter((p) => p.clientId === selectedClientId);

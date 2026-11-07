@@ -30,12 +30,14 @@ import {
 
 export function handleFirestoreError(error: unknown, operationContext: string) {
   const err = error as { code?: string; message?: string; name?: string };
+  const msg = typeof err?.message === 'string' ? err.message.toLowerCase() : '';
   if (
     err?.name === 'AbortError' ||
     err?.code === 'cancelled' ||
-    (typeof err?.message === 'string' && err.message.toLowerCase().includes('aborted'))
+    msg.includes('aborted') ||
+    msg.includes('failed to fetch')
   ) {
-    // Ignore benign stream aborts when unmounting or reconnecting
+    // Ignore benign stream aborts and reconnect fetches when unmounting or switching tabs
     return;
   }
   console.error(`Firestore error during [${operationContext}]:`, err?.message || error);

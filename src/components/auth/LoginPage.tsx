@@ -18,7 +18,7 @@ import {
 import { User } from '../../types';
 
 export const LoginPage: React.FC = () => {
-  const { users, clients, trainers, setCurrentUser, addClient, logAudit } = useApp();
+  const { users, clients, trainers, setCurrentUser, addClient, logAudit, settings } = useApp();
 
   const [authMode, setAuthMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
 
@@ -100,7 +100,7 @@ export const LoginPage: React.FC = () => {
       const validPassword = matchedUser.password || 'Dubai2026!';
       if (cleanPassword && cleanPassword !== validPassword) {
         setErrorMessage(
-          'Incorrect password. If your account was registered by an Admin, initial password is set by Admin (default: Dubai2026!).'
+          'Incorrect password. Please verify your credentials or contact Admin.'
         );
         return;
       }
@@ -201,8 +201,15 @@ export const LoginPage: React.FC = () => {
       {/* Header Branding */}
       <div className="sm:mx-auto sm:w-full sm:max-w-md z-10">
         <div className="flex justify-center">
-          <div className="bg-blue-600 text-white p-3 rounded-2xl shadow-xl flex items-center justify-center">
-            <Dumbbell className="w-8 h-8 stroke-[2.5]" />
+          <div className="bg-white p-3.5 rounded-2xl shadow-xl flex items-center justify-center border border-slate-700/50">
+            <img
+              src={settings?.companyLogoUrl || '/logo.png'}
+              alt="Waiter Walk Logo"
+              className="w-14 h-14 object-contain"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = '/logo.png';
+              }}
+            />
           </div>
         </div>
         <h2 className="mt-4 text-center text-3xl font-black text-white tracking-tight">
@@ -250,7 +257,15 @@ export const LoginPage: React.FC = () => {
             {/* SIGN IN VIEW */}
             {authMode === 'LOGIN' && (
               <div className="space-y-6">
-                <div className="text-center pb-2">
+                <div className="text-center pb-2 flex flex-col items-center">
+                  <img
+                    src={settings?.companyLogoUrl || '/logo.png'}
+                    alt="Waiter Walk Logo"
+                    className="w-12 h-12 object-contain mb-2.5"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = '/logo.png';
+                    }}
+                  />
                   <h3 className="text-lg font-extrabold text-slate-900">Sign in to your account</h3>
                   <p className="text-xs text-slate-500 mt-0.5">Access Admin, Trainer, or Client portal</p>
                 </div>
@@ -311,10 +326,6 @@ export const LoginPage: React.FC = () => {
                         {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </div>
-                    <p className="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1">
-                      <span className="font-semibold text-slate-600">Client tip:</span>
-                      <span>Initial password for accounts registered by Admin is <code className="bg-slate-100 text-blue-700 px-1 py-0.5 rounded font-mono font-bold">Dubai2026!</code></span>
-                    </p>
                   </div>
 
                   <div className="flex items-center justify-between text-xs pt-1">
@@ -361,7 +372,15 @@ export const LoginPage: React.FC = () => {
             {/* REGISTER CLIENT VIEW */}
             {authMode === 'REGISTER' && (
               <div className="space-y-5">
-                <div className="text-center pb-2">
+                <div className="text-center pb-2 flex flex-col items-center">
+                  <img
+                    src={settings?.companyLogoUrl || '/logo.png'}
+                    alt="Waiter Walk Logo"
+                    className="w-12 h-12 object-contain mb-2.5"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = '/logo.png';
+                    }}
+                  />
                   <h3 className="text-lg font-extrabold text-slate-900">Create Client Profile</h3>
                   <p className="text-xs text-slate-500 mt-0.5">Register for personal training sessions in Dubai</p>
                 </div>

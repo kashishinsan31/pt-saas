@@ -3,14 +3,59 @@
   <head>
     <script>
       (function() {
+        function isBenignError(err, message) {
+          var str = '';
+          if (typeof message === 'string') str += message;
+          if (err) {
+            if (typeof err === 'string') str += ' ' + err;
+            if (err.message) str += ' ' + err.message;
+            if (err.name) str += ' ' + err.name;
+            if (err.stack) str += ' ' + err.stack;
+          }
+          str = str.toLowerCase();
+          return (
+            str.indexOf('aborterror') !== -1 ||
+            str.indexOf('aborted') !== -1 ||
+            str.indexOf('signal is aborted') !== -1 ||
+            str.indexOf('failed to fetch') !== -1 ||
+            str.indexOf('cancelled') !== -1
+          );
+        }
+
+        window.addEventListener('unhandledrejection', function(event) {
+          if (isBenignError(event.reason)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+
+        window.addEventListener('error', function(event) {
+          if (isBenignError(event.error, event.message)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
         try {
-          var _fetch = window.fetch;
+          var originalFetch = window.fetch;
+          var wrappedFetch = function() {
+            var promise = originalFetch.apply(this, arguments);
+            if (promise && typeof promise.catch === 'function') {
+              promise.catch(function(err) {
+                // Pre-attach rejection listener so V8 never classifies benign fetch aborts as unhandled
+                isBenignError(err);
+              });
+            }
+            return promise;
+          };
+
           Object.defineProperty(window, 'fetch', {
             get: function() {
-              return _fetch;
+              return wrappedFetch;
             },
             set: function(val) {
-              _fetch = val;
+              originalFetch = val;
             },
             configurable: true,
             enumerable: true

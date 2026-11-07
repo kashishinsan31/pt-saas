@@ -129,7 +129,7 @@ export const initialAuditLogs: AuditLogItem[] = [
 
 export const initialSettings: SystemSettings = {
   companyName: 'Waiter Walk Fitness & Wellness',
-  companyLogoUrl: '/icon.svg',
+  companyLogoUrl: '/logo.png',
   currency: 'AED',
   timezone: 'Asia/Dubai',
   taxRegistrationNumber: '100293847500003',

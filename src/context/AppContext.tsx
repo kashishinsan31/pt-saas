@@ -215,23 +215,25 @@ try {
 }
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Active session user (restored from session storage if present)
+  // Active session user (restored from storage if present, otherwise null)
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
-      const sess = sessionStorage.getItem('waiterwalk_session_user');
+      const sess = localStorage.getItem('waiterwalk_session_user') || sessionStorage.getItem('waiterwalk_session_user');
       if (sess) return JSON.parse(sess);
     } catch (e) {
       // ignore
     }
-    return initialUsers[0]; // Default to Chief Admin
+    return null;
   });
 
-  // Track session user in sessionStorage for page refreshes
+  // Track session user in storage for page refreshes
   useEffect(() => {
     try {
       if (currentUser) {
+        localStorage.setItem('waiterwalk_session_user', JSON.stringify(currentUser));
         sessionStorage.setItem('waiterwalk_session_user', JSON.stringify(currentUser));
       } else {
+        localStorage.removeItem('waiterwalk_session_user');
         sessionStorage.removeItem('waiterwalk_session_user');
       }
     } catch (e) {
@@ -311,7 +313,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (items.length > 0) setPromoCodes(items);
     });
     const unsubSettings = subscribeDocument<SystemSettings>('settings', 'global', (item) => {
-      if (item) setSettings(item);
+      if (item) {
+        setSettings({
+          ...item,
+          companyLogoUrl: !item.companyLogoUrl || item.companyLogoUrl === '/icon.svg' ? '/logo.png' : item.companyLogoUrl,
+        });
+      }
     });
 
     return () => {
@@ -2850,7 +2857,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
     ]);
     setUsers(initialUsers);
-    setCurrentUser(initialUsers[0]);
+    setCurrentUser(null);
   };
 
   const exportDatabaseJSON = (): string => {

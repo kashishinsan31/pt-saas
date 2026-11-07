@@ -8,7 +8,7 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const dbId = (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId;
 
 const firestoreSettings = {
-  experimentalAutoDetectLongPolling: true,
+  experimentalForceLongPolling: true,
 };
 
 let firestoreDb;
@@ -23,34 +23,45 @@ try {
 export const db = firestoreDb;
 export const auth = getAuth(app);
 
-// Globally trap and silence benign AbortError exceptions from Firestore fetch streams
+// Globally trap and silence benign AbortError and stream disconnect exceptions
 if (typeof window !== 'undefined') {
-  const isAbortError = (err: any) => {
-    if (!err) return false;
-    const name = err.name || err.constructor?.name;
-    const msg = typeof err.message === 'string' ? err.message.toLowerCase() : '';
-    const code = err.code;
+  const isBenignStreamError = (err: any, message?: string) => {
+    let str = '';
+    if (typeof message === 'string') str += message + ' ';
+    if (typeof err === 'string') str += err + ' ';
+    if (err) {
+      if (typeof err.message === 'string') str += err.message + ' ';
+      if (typeof err.name === 'string') str += err.name + ' ';
+      if (typeof err.code === 'string') str += err.code + ' ';
+      if (typeof err.stack === 'string') str += err.stack + ' ';
+    }
+    const lower = str.toLowerCase();
     return (
-      name === 'AbortError' ||
-      code === 'cancelled' ||
-      msg.includes('aborted') ||
-      msg.includes('signal is aborted')
+      lower.includes('aborterror') ||
+      lower.includes('aborted') ||
+      lower.includes('signal is aborted') ||
+      lower.includes('failed to fetch') ||
+      lower.includes('cancelled')
     );
   };
 
-  window.addEventListener('unhandledrejection', (event) => {
-    if (isAbortError(event.reason)) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  });
+  window.addEventListener(
+    'unhandledrejection',
+    (event) => {
+      if (isBenignStreamError(event.reason)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    },
+    true
+  );
 
   window.addEventListener(
     'error',
     (event) => {
-      if (isAbortError(event.error) || (event.message && isAbortError({ message: event.message }))) {
+      if (isBenignStreamError(event.error, event.message)) {
         event.preventDefault();
-        event.stopPropagation();
+        event.stopImmediatePropagation();
       }
     },
     true
