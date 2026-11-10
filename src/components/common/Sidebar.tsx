@@ -33,7 +33,8 @@ export type ActiveTab =
   | 'reports'
   | 'ops'
   | 'settings'
-  | 'tests';
+  | 'tests'
+  | 'upcoming';
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -131,6 +132,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: CheckCircle2,
       roles: ['admin', 'trainer', 'client'],
       badge: 'VERIFIER',
+    },
+    {
+      id: 'upcoming',
+      label: 'Upcoming Features',
+      icon: Sparkles,
+      roles: ['admin', 'trainer', 'client'],
+      badge: 'ROADMAP',
     },
   ];
 

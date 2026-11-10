@@ -19,6 +19,7 @@ import {
   HealthIssueNote,
   HealthDeclaration,
   PromoCode,
+  BodyMetricEntry,
 } from '../types';
 import { processStripeApiCharge } from '../services/stripeApi';
 import {
@@ -29,6 +30,8 @@ import {
   deleteDocument,
   seedCollectionIfEmpty,
   seedSettingsIfEmpty,
+  fetchCollectionFromServer,
+  fetchDocumentFromServer,
 } from '../services/firestoreService';
 import {
   initialUsers,
@@ -83,6 +86,11 @@ interface AppContextType {
   auditLogs: AuditLogItem[];
   settings: SystemSettings;
 
+  // Real-Time Server Synchronization (Bypassing Local Cache)
+  isRefreshingServerData: boolean;
+  lastServerSyncTime: string | null;
+  refreshDataFromServer: () => Promise<{ success: boolean; message: string }>;
+
   // Actions
   addSavedCard: (clientId: string, cardData: Omit<SavedCard, 'id' | 'clientId' | 'createdAt'>) => SavedCard;
   removeSavedCard: (cardId: string) => void;
@@ -98,7 +106,7 @@ interface AppContextType {
   updateTrainer: (id: string, updates: Partial<Trainer>) => void;
   savePackageDefinition: (pkg: PackageDefinition) => void;
 
-  // Purchase & Allocation
+  // Purchase, Allocation & Plan Switching
   purchasePackage: (
     clientId: string,
     packageDefId: string,
@@ -117,8 +125,39 @@ interface AppContextType {
 
   createDuePackage: (
     clientId: string,
-    packageDefId: string
+    packageDefId: string,
+    customOptions?: {
+      customPriceAED?: number;
+      customValidityDays?: number;
+      customSessionCount?: number;
+      customName?: string;
+      discountInfo?: {
+        discountCode?: string;
+        discountAmountAED?: number;
+        vatAmountAED?: number;
+        totalAmountAED?: number;
+      };
+    }
   ) => { success: boolean; message: string; packageId?: string };
+
+  switchClientPackage: (
+    clientId: string,
+    newPackageDefId: string,
+    options?: {
+      activationMode: 'PAID' | 'DUE';
+      paymentMethod?: 'Card' | 'Cash' | 'Bank Transfer' | 'Stripe';
+      carryOverCredits?: boolean;
+      customPriceAED?: number;
+      customValidityDays?: number;
+      customSessionCount?: number;
+      notes?: string;
+    }
+  ) => { success: boolean; message: string; packageId?: string };
+
+  logClientBodyMetric: (
+    clientId: string,
+    metric: Omit<BodyMetricEntry, 'id'>
+  ) => Promise<{ success: boolean; message: string }>;
 
   payAndActivatePackage: (
     packageId: string,
@@ -258,6 +297,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [slides, setSlides] = useState<DashboardSlide[]>(initialSlides);
   const [promoCodes, setPromoCodes] = useState<PromoCode[]>(initialPromoCodes);
   const [testSuiteResults, setTestSuiteResults] = useState<TestResult[]>([]);
+
+  // Server data refresh state (bypassing local cache)
+  const [isRefreshingServerData, setIsRefreshingServerData] = useState(false);
+  const [lastServerSyncTime, setLastServerSyncTime] = useState<string | null>(null);
+
+  // Directly fetch all records fresh from Firestore backend server (bypassing any local cache)
+  const refreshDataFromServer = async (): Promise<{ success: boolean; message: string }> => {
+    setIsRefreshingServerData(true);
+    try {
+      const [
+        usersRes,
+        clientsRes,
+        trainersRes,
+        pkgDefsRes,
+        clientPkgsRes,
+        bookingsRes,
+        txnsRes,
+        paymentsRes,
+        subsRes,
+        cardsRes,
+        notifsRes,
+        auditsRes,
+        slidesRes,
+        promosRes,
+      ] = await Promise.all([
+        fetchCollectionFromServer<User>('users'),
+        fetchCollectionFromServer<Client>('clients'),
+        fetchCollectionFromServer<Trainer>('trainers'),
+        fetchCollectionFromServer<PackageDefinition>('packageDefinitions'),
+        fetchCollectionFromServer<ClientPackage>('clientPackages'),
+        fetchCollectionFromServer<SessionBooking>('bookings'),
+        fetchCollectionFromServer<SessionTransaction>('transactions'),
+        fetchCollectionFromServer<PaymentRecord>('payments'),
+        fetchCollectionFromServer<SubscriptionRecord>('subscriptions'),
+        fetchCollectionFromServer<SavedCard>('savedCards'),
+        fetchCollectionFromServer<NotificationItem>('notifications'),
+        fetchCollectionFromServer<AuditLogItem>('auditLogs'),
+        fetchCollectionFromServer<DashboardSlide>('slides'),
+        fetchCollectionFromServer<PromoCode>('promoCodes'),
+      ]);
+
+      if (usersRes.length > 0) setUsers(usersRes);
+      setClients(clientsRes);
+      setTrainers(trainersRes);
+      if (pkgDefsRes.length > 0) setPackageDefinitions(pkgDefsRes);
+      setClientPackages(clientPkgsRes);
+      setBookings(bookingsRes);
+      setTransactions(txnsRes);
+      setPayments(paymentsRes);
+      setSubscriptions(subsRes);
+      setSavedCards(cardsRes);
+      setNotifications(notifsRes);
+      if (auditsRes.length > 0) setAuditLogs(auditsRes);
+      if (slidesRes.length > 0) setSlides(slidesRes);
+      if (promosRes.length > 0) setPromoCodes(promosRes);
+
+      const settingsDoc = await fetchDocumentFromServer<SystemSettings>('settings', 'global');
+      if (settingsDoc) {
+        setSettings({
+          ...settingsDoc,
+          companyLogoUrl: !settingsDoc.companyLogoUrl || settingsDoc.companyLogoUrl === '/icon.svg' ? '/logo.png' : settingsDoc.companyLogoUrl,
+        });
+      }
+
+      const syncTimeString = new Date().toLocaleTimeString('en-AE', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Dubai' });
+      setLastServerSyncTime(syncTimeString);
+
+      return {
+        success: true,
+        message: `Fresh data loaded directly from Firestore server (${syncTimeString} GST)!`,
+      };
+    } catch (err: any) {
+      console.error('Failed to refresh data from server:', err);
+      return {
+        success: false,
+        message: err?.message || 'Error communicating with Firestore server.',
+      };
+    } finally {
+      setIsRefreshingServerData(false);
+    }
+  };
 
   // 1. Initialize Firestore baseline records and real-time onSnapshot listeners
   useEffect(() => {
@@ -1222,7 +1342,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       clientId,
       packageDefinitionId: pkgDef.id,
       packageName: effectivePackageName,
-      packagePriceAED: basePrice,
+      basePriceAED: basePrice,
+      vatAmountAED: vatAmt,
+      packagePriceAED: totalAmount,
       totalSessions: effectiveSessionCount,
       completedSessions: 0,
       refundedSessions: 0,
@@ -1264,7 +1386,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       creditChange: effectiveSessionCount,
       previousBalance: 0,
       newBalance: effectiveSessionCount,
-      reason: `Purchased ${effectivePackageName} (${effectiveSessionCount} sessions). Paid AED ${basePrice}. Expiry set to ${expiryDate}`,
+      reason: `Purchased ${effectivePackageName} (${effectiveSessionCount} sessions). Base AED ${basePrice} + 5% VAT AED ${vatAmt} = Total AED ${totalAmount}. Expiry set to ${expiryDate}`,
       responsibleUserId: currentUser?.id || clientId,
       responsibleRole: currentUser?.role || 'client',
     };
@@ -1273,7 +1395,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     logAudit(
       'PACKAGE_PURCHASED',
-      `Client ${client.fullName} purchased ${effectivePackageName} for AED ${basePrice}. Allocated exactly ${effectiveSessionCount} credits. Expiry: ${expiryDate}`
+      `Client ${client.fullName} purchased ${effectivePackageName} (Base AED ${basePrice} + 5% VAT AED ${vatAmt} = Total AED ${totalAmount}). Allocated ${effectiveSessionCount} credits. Expiry: ${expiryDate}`
     );
 
     return {
@@ -1283,8 +1405,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  // Create Due Package (Admin allocates package with status 'Pending Payment', requiring Client Card payment via Client Portal)
-  const createDuePackage = (clientId: string, packageDefId: string) => {
+  // Create Due Package (Admin allocates package with status 'Pending Payment', calculating 5% VAT on base price)
+  const createDuePackage = (
+    clientId: string,
+    packageDefId: string,
+    customOptions?: {
+      customPriceAED?: number;
+      customValidityDays?: number;
+      customSessionCount?: number;
+      customName?: string;
+      discountInfo?: {
+        discountCode?: string;
+        discountAmountAED?: number;
+        vatAmountAED?: number;
+        totalAmountAED?: number;
+      };
+    }
+  ) => {
     const pkgDef = packageDefinitions.find((p) => p.id === packageDefId);
     const client = clients.find((c) => c.id === clientId);
 
@@ -1292,20 +1429,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Invalid package definition or client.' };
     }
 
+    const effectiveBasePrice = customOptions?.customPriceAED !== undefined ? customOptions.customPriceAED : pkgDef.priceAED;
+    const effectivePackageName = customOptions?.customName || pkgDef.name;
+    const effectiveSessionCount = customOptions?.customSessionCount !== undefined ? customOptions.customSessionCount : pkgDef.sessionCount;
+    const effectiveValidityDays = customOptions?.customValidityDays !== undefined ? customOptions.customValidityDays : (pkgDef.validityDays || 30);
+
+    const discountAmount = customOptions?.discountInfo?.discountAmountAED || 0;
+    const subtotal = Math.max(0, effectiveBasePrice - discountAmount);
+    // Explicit 5% UAE VAT calculation on the base price
+    const vatAmount = customOptions?.discountInfo?.vatAmountAED !== undefined
+      ? customOptions.discountInfo.vatAmountAED
+      : Math.round(subtotal * 0.05 * 100) / 100;
+    const totalAmount = customOptions?.discountInfo?.totalAmountAED !== undefined
+      ? customOptions.discountInfo.totalAmountAED
+      : subtotal + vatAmount;
+
     const startDate = formatDubaiDate(new Date());
-    const expiryDate = calculateExpiryDate(startDate, pkgDef.validityDays || 30);
+    const expiryDate = calculateExpiryDate(startDate, effectiveValidityDays);
     const pkgId = `PKG-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const payRef = `PAY-${Math.floor(7000 + Math.random() * 9000)}`;
 
-    // Create Payment Record with status 'Pending'
+    // Create Payment Record with status 'Pending' including full VAT breakdown
     const newPayment: PaymentRecord = {
       id: payRef,
       clientId,
       packageId: pkgId,
-      packageName: pkgDef.name,
-      amountAED: pkgDef.priceAED,
+      packageName: effectivePackageName,
+      baseAmountAED: effectiveBasePrice,
+      discountAmountAED: discountAmount,
+      discountCode: customOptions?.discountInfo?.discountCode,
+      subtotalAED: subtotal,
+      vatAmountAED: vatAmount,
+      amountAED: totalAmount,
       amountPaidAED: 0,
-      outstandingBalanceAED: pkgDef.priceAED,
+      outstandingBalanceAED: totalAmount,
       paymentDate: startDate,
       paymentMethod: 'Card',
       transactionReference: `invoice_due_${Date.now()}`,
@@ -1318,9 +1475,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: pkgId,
       clientId,
       packageDefinitionId: pkgDef.id,
-      packageName: pkgDef.name,
-      packagePriceAED: pkgDef.priceAED,
-      totalSessions: pkgDef.sessionCount,
+      packageName: effectivePackageName,
+      basePriceAED: effectiveBasePrice,
+      vatAmountAED: vatAmount,
+      packagePriceAED: totalAmount,
+      totalSessions: effectiveSessionCount,
       completedSessions: 0,
       refundedSessions: 0,
       lateCancellationDeductions: 0,
@@ -1345,8 +1504,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const notif: NotificationItem = {
         id: `NOTIF-${Date.now()}`,
         userId: clientUser.id,
-        title: `Payment Due: ${pkgDef.name}`,
-        message: `Admin has assigned ${pkgDef.name} (AED ${pkgDef.priceAED}). Please add/select your payment card in your client portal to activate your plan.`,
+        title: `Payment Due: ${effectivePackageName}`,
+        message: `Admin has assigned ${effectivePackageName} (Base AED ${effectiveBasePrice} + 5% VAT AED ${vatAmount} = Total Due AED ${totalAmount}). Please pay via your client portal to activate your plan.`,
         type: 'payment',
         read: false,
         timestamp: new Date().toISOString(),
@@ -1357,14 +1516,223 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     logAudit(
       'CREATE_DUE_PACKAGE',
-      `Assigned due package ${pkgDef.name} (AED ${pkgDef.priceAED}) to ${client.fullName} (${clientId}). Payment pending client card authorization.`
+      `Assigned due package ${effectivePackageName} (Base AED ${effectiveBasePrice} + 5% VAT AED ${vatAmount} = Total AED ${totalAmount}) to ${client.fullName} (${clientId}). Payment pending client card authorization.`
     );
 
     return {
       success: true,
-      message: `Package invoice created for ${client.fullName}! Payment request sent to client portal.`,
+      message: `Package invoice created for ${client.fullName}! Base: AED ${effectiveBasePrice} + 5% VAT: AED ${vatAmount} = Total Due: AED ${totalAmount}. Payment request sent to client portal.`,
       packageId: pkgId,
     };
+  };
+
+  // Switch / Change Client Package from Admin Panel
+  const switchClientPackage = (
+    clientId: string,
+    newPackageDefId: string,
+    options?: {
+      activationMode: 'PAID' | 'DUE';
+      paymentMethod?: 'Card' | 'Cash' | 'Bank Transfer' | 'Stripe';
+      carryOverCredits?: boolean;
+      customPriceAED?: number;
+      customValidityDays?: number;
+      customSessionCount?: number;
+      notes?: string;
+    }
+  ) => {
+    const pkgDef = packageDefinitions.find((p) => p.id === newPackageDefId);
+    const client = clients.find((c) => c.id === clientId);
+
+    if (!pkgDef || !client) {
+      return { success: false, message: 'Invalid package definition or client.' };
+    }
+
+    const activationMode = options?.activationMode || 'PAID';
+    const paymentMethod = options?.paymentMethod || 'Card';
+    const effectiveBasePrice = options?.customPriceAED !== undefined ? options.customPriceAED : pkgDef.priceAED;
+    const vatAmount = Math.round(effectiveBasePrice * 0.05 * 100) / 100;
+    const totalAmount = effectiveBasePrice + vatAmount;
+    const effectiveValidityDays = options?.customValidityDays !== undefined ? options.customValidityDays : (pkgDef.validityDays || 30);
+    const baseSessionCount = options?.customSessionCount !== undefined ? options.customSessionCount : pkgDef.sessionCount;
+
+    // Find current active package if any
+    const existingActivePkg = clientPackages.find((p) => p.clientId === clientId && p.status === 'Active');
+    const carriedCredits = (options?.carryOverCredits && existingActivePkg) ? existingActivePkg.remainingSessions : 0;
+    const totalAllocatedCredits = baseSessionCount + carriedCredits;
+
+    const startDate = formatDubaiDate(new Date());
+    const expiryDate = calculateExpiryDate(startDate, effectiveValidityDays);
+    const pkgId = `PKG-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const payRef = `PAY-${Math.floor(7000 + Math.random() * 9000)}`;
+
+    if (activationMode === 'PAID') {
+      const newPayment: PaymentRecord = {
+        id: payRef,
+        clientId,
+        packageId: pkgId,
+        packageName: pkgDef.name,
+        baseAmountAED: effectiveBasePrice,
+        vatAmountAED: vatAmount,
+        subtotalAED: effectiveBasePrice,
+        amountAED: totalAmount,
+        amountPaidAED: totalAmount,
+        outstandingBalanceAED: 0,
+        paymentDate: startDate,
+        paymentMethod,
+        transactionReference: `switch_paid_${Date.now()}`,
+        status: 'Paid',
+        createdAt: new Date().toISOString(),
+      };
+
+      const newClientPackage: ClientPackage = {
+        id: pkgId,
+        clientId,
+        packageDefinitionId: pkgDef.id,
+        packageName: pkgDef.name,
+        basePriceAED: effectiveBasePrice,
+        vatAmountAED: vatAmount,
+        packagePriceAED: totalAmount,
+        totalSessions: totalAllocatedCredits,
+        completedSessions: 0,
+        refundedSessions: 0,
+        lateCancellationDeductions: 0,
+        noShowDeductions: 0,
+        expiredSessions: 0,
+        remainingSessions: totalAllocatedCredits,
+        startDate,
+        expiryDate,
+        status: 'Active',
+        paymentReference: payRef,
+        purchasedAt: new Date().toISOString(),
+      };
+
+      // Supersede all existing active and pending packages in React state and Firestore
+      setClientPackages((prev) => {
+        const updated = prev.map((p) => {
+          if (p.clientId === clientId && (p.status === 'Active' || p.status === 'Pending Payment')) {
+            updateDocument('clientPackages', p.id, { status: 'Superseded' });
+            return { ...p, status: 'Superseded' as ClientPackageStatus };
+          }
+          return p;
+        });
+        return [newClientPackage, ...updated];
+      });
+
+      setPayments((prev) => [newPayment, ...prev]);
+      setDocument('payments', newPayment.id, newPayment);
+      setDocument('clientPackages', newClientPackage.id, newClientPackage);
+
+      // Create ledger transaction
+      const newTxn: SessionTransaction = {
+        id: `TXN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        clientId,
+        packageId: pkgId,
+        timestamp: new Date().toISOString(),
+        type: 'PURCHASE_ALLOCATION',
+        creditChange: totalAllocatedCredits,
+        previousBalance: existingActivePkg ? existingActivePkg.remainingSessions : 0,
+        newBalance: totalAllocatedCredits,
+        reason: `Admin switched plan to ${pkgDef.name}${carriedCredits > 0 ? ` (carried ${carriedCredits} credits from previous plan)` : ''}`,
+        responsibleUserId: currentUser?.id || 'admin',
+        responsibleRole: 'admin',
+      };
+      setTransactions((prev) => [newTxn, ...prev]);
+      setDocument('transactions', newTxn.id, newTxn);
+
+      logAudit(
+        'SWITCH_CLIENT_PLAN',
+        `Switched plan for ${client.fullName} (${clientId}) to ${pkgDef.name} (Base AED ${effectiveBasePrice} + 5% VAT AED ${vatAmount} = Total AED ${totalAmount}). ${totalAllocatedCredits} active sessions ready.`
+      );
+
+      return {
+        success: true,
+        message: `Plan successfully switched to ${pkgDef.name}! ${totalAllocatedCredits} sessions allocated to ${client.fullName}.`,
+        packageId: pkgId,
+      };
+    } else {
+      // Due invoice mode
+      const newPayment: PaymentRecord = {
+        id: payRef,
+        clientId,
+        packageId: pkgId,
+        packageName: pkgDef.name,
+        baseAmountAED: effectiveBasePrice,
+        vatAmountAED: vatAmount,
+        subtotalAED: effectiveBasePrice,
+        amountAED: totalAmount,
+        amountPaidAED: 0,
+        outstandingBalanceAED: totalAmount,
+        paymentDate: startDate,
+        paymentMethod: 'Card',
+        transactionReference: `invoice_switch_${Date.now()}`,
+        status: 'Pending',
+        createdAt: new Date().toISOString(),
+      };
+
+      const newClientPackage: ClientPackage = {
+        id: pkgId,
+        clientId,
+        packageDefinitionId: pkgDef.id,
+        packageName: pkgDef.name,
+        basePriceAED: effectiveBasePrice,
+        vatAmountAED: vatAmount,
+        packagePriceAED: totalAmount,
+        totalSessions: totalAllocatedCredits,
+        completedSessions: 0,
+        refundedSessions: 0,
+        lateCancellationDeductions: 0,
+        noShowDeductions: 0,
+        expiredSessions: 0,
+        remainingSessions: 0,
+        startDate,
+        expiryDate,
+        status: 'Pending Payment',
+        paymentReference: payRef,
+        purchasedAt: new Date().toISOString(),
+      };
+
+      // Supersede previous pending packages
+      setClientPackages((prev) => {
+        const updated = prev.map((p) => {
+          if (p.clientId === clientId && p.status === 'Pending Payment') {
+            updateDocument('clientPackages', p.id, { status: 'Superseded' });
+            return { ...p, status: 'Superseded' as ClientPackageStatus };
+          }
+          return p;
+        });
+        return [newClientPackage, ...updated];
+      });
+
+      setPayments((prev) => [newPayment, ...prev]);
+      setDocument('payments', newPayment.id, newPayment);
+      setDocument('clientPackages', newClientPackage.id, newClientPackage);
+
+      return {
+        success: true,
+        message: `Switch invoice created for ${client.fullName}! Payment request for ${pkgDef.name} (AED ${totalAmount} incl. VAT) sent.`,
+        packageId: pkgId,
+      };
+    }
+  };
+
+  // Client Progress & Body Metrics Logger
+  const logClientBodyMetric = async (clientId: string, metric: Omit<BodyMetricEntry, 'id'>) => {
+    const newEntry: BodyMetricEntry = {
+      ...metric,
+      id: `BM-${Date.now()}`,
+    };
+    const client = clients.find((c) => c.id === clientId);
+    if (!client) {
+      return { success: false, message: 'Client not found.' };
+    }
+    const currentMetrics = client.bodyMetrics || [];
+    const updatedMetrics = [...currentMetrics, newEntry].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    
+    setClients((prev) => prev.map((c) => (c.id === clientId ? { ...c, bodyMetrics: updatedMetrics } : c)));
+    await updateDocument('clients', clientId, { bodyMetrics: updatedMetrics });
+
+    logAudit('LOG_BODY_METRIC', `Logged body metric check-in for ${client.fullName}: Weight ${metric.weightKg} kg on ${metric.date}`);
+    return { success: true, message: 'Metric successfully logged and saved to server!' };
   };
 
   // Pay and Activate Package by Client via Card
@@ -2952,8 +3320,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addTrainer,
         updateTrainer,
         savePackageDefinition,
+        isRefreshingServerData,
+        lastServerSyncTime,
+        refreshDataFromServer,
         purchasePackage,
         createDuePackage,
+        switchClientPackage,
+        logClientBodyMetric,
         payAndActivatePackage,
         createBooking,
         markSessionCompleted,

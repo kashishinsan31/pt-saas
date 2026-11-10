@@ -40,6 +40,7 @@ export const TrainerDashboard: React.FC = () => {
     cancelSessionByTrainer,
     updateClient,
     createBooking,
+    rescheduleBooking,
   } = useApp();
 
   const trainerId = currentUser?.associatedId || 'WW-TR-2001';
@@ -73,6 +74,33 @@ export const TrainerDashboard: React.FC = () => {
   const [isCompleteModalOpen, setIsCompleteModalOpen] = useState(false);
   const [workoutNotes, setWorkoutNotes] = useState('');
   const [completionError, setCompletionError] = useState<string | null>(null);
+
+  // Trainer Reschedule Modal State
+  const [isRescheduleModalOpen, setIsRescheduleModalOpen] = useState(false);
+  const [selectedRescheduleBooking, setSelectedRescheduleBooking] = useState<any>(null);
+  const [rescheduleDate, setRescheduleDate] = useState('');
+  const [rescheduleStartTime, setRescheduleStartTime] = useState('');
+  const [rescheduleEndTime, setRescheduleEndTime] = useState('');
+  const [rescheduleMsg, setRescheduleMsg] = useState('');
+
+  const handleConfirmRescheduleTrainer = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedRescheduleBooking) return;
+    const res = rescheduleBooking(
+      selectedRescheduleBooking.id,
+      rescheduleDate,
+      rescheduleStartTime,
+      rescheduleEndTime
+    );
+    if (res.success) {
+      setIsRescheduleModalOpen(false);
+      setSelectedRescheduleBooking(null);
+      setRescheduleMsg('');
+    } else {
+      setRescheduleMsg(res.message);
+    }
+  };
+
 
   // Create Session Modal for Logged-In Trainer
   const [isBookModalOpen, setIsBookModalOpen] = useState(false);
@@ -289,29 +317,47 @@ export const TrainerDashboard: React.FC = () => {
                     {(() => {
                       const timing = canMarkSessionCompleted(b.sessionDate, b.startTime);
                       return (
-                        <div className="flex flex-col items-end gap-1 shrink-0">
-                          <button
-                            onClick={() => {
-                              setSelectedBooking(b);
-                              setWorkoutNotes('');
-                              setCompletionError(null);
-                              setIsCompleteModalOpen(true);
-                            }}
-                            className={`px-3 py-2 font-bold rounded-lg text-xs shadow-sm flex items-center gap-1.5 ${
-                              timing.allowed
-                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                                : 'bg-amber-500 hover:bg-amber-600 text-white'
-                            }`}
-                          >
-                            {!timing.allowed && <Lock className="w-3.5 h-3.5" />}
-                            <span>Complete Session</span>
-                          </button>
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <div className="flex items-center space-x-1.5">
+                            <button
+                              onClick={() => {
+                                setSelectedRescheduleBooking(b);
+                                setRescheduleDate(b.sessionDate);
+                                setRescheduleStartTime(b.startTime);
+                                setRescheduleEndTime(b.endTime);
+                                setRescheduleMsg('');
+                                setIsRescheduleModalOpen(true);
+                              }}
+                              className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs shadow-xs flex items-center space-x-1 cursor-pointer"
+                              title="Reschedule requested session date and timing"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                              <span>Reschedule</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSelectedBooking(b);
+                                setWorkoutNotes('');
+                                setCompletionError(null);
+                                setIsCompleteModalOpen(true);
+                              }}
+                              className={`px-3 py-1.5 font-bold rounded-lg text-xs shadow-xs flex items-center gap-1.5 cursor-pointer ${
+                                timing.allowed
+                                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                  : 'bg-amber-500 hover:bg-amber-600 text-white'
+                              }`}
+                            >
+                              {!timing.allowed && <Lock className="w-3.5 h-3.5" />}
+                              <span>Complete</span>
+                            </button>
+                          </div>
                           {!timing.allowed && (
-                            <span className="text-[10px] text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200/60 max-w-[160px] text-right">
+                            <span className="text-[10px] text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200/60 max-w-[180px] text-right">
                               {b.sessionDate > todayStr ? 'Opens session day' : `Opens at ${timing.allowedTimeString || '1h before start'}`}
                             </span>
                           )}
                         </div>
+
                       );
                     })()}
                   </div>
@@ -1113,6 +1159,91 @@ export const TrainerDashboard: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Trainer Reschedule Date & Timing Modal */}
+      {isRescheduleModalOpen && selectedRescheduleBooking && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-200">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Reschedule Session Date & Timing</h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Update timing for {clients.find((c) => c.id === selectedRescheduleBooking.clientId)?.fullName || 'Client'}
+                </p>
+              </div>
+              <button onClick={() => setIsRescheduleModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {rescheduleMsg && (
+              <div className="mb-4 bg-red-50 border border-red-200 text-red-700 text-xs p-3 rounded-lg flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                <span>{rescheduleMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleConfirmRescheduleTrainer} className="space-y-4 text-xs">
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Current Schedule</span>
+                <div className="font-bold text-slate-800">
+                  {formatReadableDate(selectedRescheduleBooking.sessionDate)} • {selectedRescheduleBooking.startTime} - {selectedRescheduleBooking.endTime}
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1">New Session Date</label>
+                <input
+                  type="date"
+                  required
+                  value={rescheduleDate}
+                  onChange={(e) => setRescheduleDate(e.target.value)}
+                  className="w-full p-2.5 border border-slate-300 rounded-lg text-xs"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Start Time</label>
+                  <input
+                    type="time"
+                    required
+                    value={rescheduleStartTime}
+                    onChange={(e) => setRescheduleStartTime(e.target.value)}
+                    className="w-full p-2.5 border border-slate-300 rounded-lg text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">End Time</label>
+                  <input
+                    type="time"
+                    required
+                    value={rescheduleEndTime}
+                    onChange={(e) => setRescheduleEndTime(e.target.value)}
+                    className="w-full p-2.5 border border-slate-300 rounded-lg text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setIsRescheduleModalOpen(false)}
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold"
+                >
+                  Save Rescheduled Date & Time
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

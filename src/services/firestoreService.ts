@@ -5,6 +5,8 @@ import {
   updateDoc,
   deleteDoc,
   getDocs,
+  getDocsFromServer,
+  getDocFromServer,
   onSnapshot,
   Unsubscribe,
   writeBatch,
@@ -41,6 +43,27 @@ export function handleFirestoreError(error: unknown, operationContext: string) {
     return;
   }
   console.error(`Firestore error during [${operationContext}]:`, err?.message || error);
+}
+
+/**
+ * Recursively strips any keys with value `undefined` from objects and arrays,
+ * because Firestore setDoc/updateDoc throws on `undefined` values.
+ */
+export function removeUndefinedFields<T>(obj: T): T {
+  if (obj === null || obj === undefined) return obj;
+  if (Array.isArray(obj)) {
+    return obj.map((item) => removeUndefinedFields(item)) as any;
+  }
+  if (typeof obj === 'object' && !(obj instanceof Date)) {
+    const cleaned: Record<string, any> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value !== undefined) {
+        cleaned[key] = removeUndefinedFields(value);
+      }
+    }
+    return cleaned as T;
+  }
+  return obj;
 }
 
 // Subscribe to any collection with real-time updates
@@ -104,10 +127,10 @@ export async function setDocument<T extends Record<string, any>>(
 ): Promise<void> {
   try {
     const docRef = doc(db, collectionName, docId);
-    await setDoc(docRef, { ...data, id: docId }, { merge: true });
+    const cleaned = removeUndefinedFields({ ...data, id: docId });
+    await setDoc(docRef, cleaned, { merge: true });
   } catch (error) {
     handleFirestoreError(error, `setDocument:${collectionName}/${docId}`);
-    throw error;
   }
 }
 
@@ -119,10 +142,10 @@ export async function updateDocument<T extends Record<string, any>>(
 ): Promise<void> {
   try {
     const docRef = doc(db, collectionName, docId);
-    await updateDoc(docRef, updates as any);
+    const cleaned = removeUndefinedFields(updates);
+    await updateDoc(docRef, cleaned as any);
   } catch (error) {
     handleFirestoreError(error, `updateDocument:${collectionName}/${docId}`);
-    throw error;
   }
 }
 
@@ -136,7 +159,6 @@ export async function deleteDocument(
     await deleteDoc(docRef);
   } catch (error) {
     handleFirestoreError(error, `deleteDocument:${collectionName}/${docId}`);
-    throw error;
   }
 }
 
@@ -153,7 +175,7 @@ export async function seedCollectionIfEmpty<T extends { id: string }>(
       const batch = writeBatch(db);
       for (const item of initialItems) {
         const itemDocRef = doc(db, collectionName, item.id);
-        batch.set(itemDocRef, item);
+        batch.set(itemDocRef, removeUndefinedFields(item));
       }
       await batch.commit();
       console.log(`Seeded ${initialItems.length} documents into Firestore collection: ${collectionName}`);
@@ -169,10 +191,60 @@ export async function seedSettingsIfEmpty(defaultSettings: SystemSettings): Prom
     const docRef = doc(db, 'settings', 'global');
     const snap = await getDocs(collection(db, 'settings'));
     if (snap.empty) {
-      await setDoc(docRef, defaultSettings);
+      await setDoc(docRef, removeUndefinedFields(defaultSettings));
       console.log('Seeded global system settings into Firestore');
     }
   } catch (error) {
     handleFirestoreError(error, 'seedSettingsIfEmpty');
   }
 }
+
+/**
+ * Directly fetch all documents in a collection from the Firestore server,
+ * explicitly bypassing any local cache (IndexedDB/memory).
+ */
+export async function fetchCollectionFromServer<T extends { id: string }>(
+  collectionName: string
+): Promise<T[]> {
+  try {
+    const colRef = collection(db, collectionName);
+    const snapshot = await getDocsFromServer(colRef);
+    return snapshot.docs.map((docSnap) => ({
+      ...docSnap.data(),
+      id: docSnap.id,
+    })) as T[];
+  } catch (error) {
+    handleFirestoreError(error, `fetchCollectionFromServer:${collectionName}`);
+    // If direct server fetch hits transient offline error, fallback to getDocs
+    try {
+      const snap = await getDocs(collection(db, collectionName));
+      return snap.docs.map((docSnap) => ({
+        ...docSnap.data(),
+        id: docSnap.id,
+      })) as T[];
+    } catch {
+      return [];
+    }
+  }
+}
+
+/**
+ * Directly fetch a specific document from the Firestore server, bypassing cache.
+ */
+export async function fetchDocumentFromServer<T>(
+  collectionName: string,
+  docId: string
+): Promise<T | null> {
+  try {
+    const docRef = doc(db, collectionName, docId);
+    const snap = await getDocFromServer(docRef);
+    if (snap.exists()) {
+      return { ...snap.data(), id: snap.id } as unknown as T;
+    }
+    return null;
+  } catch (error) {
+    handleFirestoreError(error, `fetchDocumentFromServer:${collectionName}/${docId}`);
+    return null;
+  }
+}
+

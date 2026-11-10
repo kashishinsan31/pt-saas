@@ -7,6 +7,7 @@ import {
   ChevronDown,
   CheckCircle2,
   Menu,
+  RefreshCw,
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -30,6 +31,7 @@ const TAB_TITLES: Record<string, string> = {
   reports: 'Reports & Analytics',
   settings: 'System Settings',
   tests: 'System Test Suite',
+  upcoming: 'Upcoming Features Roadmap',
 };
 
 export const Header: React.FC<HeaderProps> = ({
@@ -37,8 +39,27 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleSidebarMobile,
   onOpenNotifications,
 }) => {
-  const { currentUser, logout, loginAsRole, notifications, trainers, clients } = useApp();
+  const {
+    currentUser,
+    logout,
+    loginAsRole,
+    notifications,
+    trainers,
+    clients,
+    refreshDataFromServer,
+    isRefreshingServerData,
+    lastServerSyncTime,
+  } = useApp();
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
+  const [refreshFeedback, setRefreshFeedback] = useState<string | null>(null);
+
+  const handleServerRefresh = async () => {
+    const res = await refreshDataFromServer();
+    setRefreshFeedback(res.message);
+    setTimeout(() => {
+      setRefreshFeedback(null);
+    }, 3500);
+  };
 
   const unreadNotifications = notifications.filter((n) => !n.read);
   const activeTitle = TAB_TITLES[activeTab] || 'Dashboard';
@@ -106,26 +127,9 @@ export const Header: React.FC<HeaderProps> = ({
             )}
             <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full ring-2 ring-white"></span>
           </div>
-
-          {/* Stacked Native App Bar Typography */}
-          <div className="min-w-0">
-            <div className="flex items-center space-x-1.5">
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider truncate">
-                {getRoleDisplayName(currentUser?.role)} Portal
-              </span>
-              <span className="hidden sm:inline-block text-[10px] bg-slate-100 text-slate-600 font-bold px-1.5 py-0.2 rounded-full">
-                Dubai
-              </span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <h1 className="text-sm sm:text-base font-black text-slate-900 tracking-tight truncate">
-                Waiter Walk Fitness
-              </h1>
-            </div>
-          </div>
         </div>
 
-        {/* Center: Admin Portal Switcher OR Static Role Badge (Strictly no switching in trainer/client portals) */}
+        {/* Center: Admin Portal Switcher (Only visible to admin role) */}
         {currentUser?.role === 'admin' ? (
           <div className="relative">
             <button
@@ -207,23 +211,27 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             )}
           </div>
-        ) : (
-          /* Trainer & Client Portals: Static role badge only - account switching is completely removed */
-          <div className="flex items-center space-x-1.5 bg-slate-100/90 text-slate-700 px-3 py-1.5 rounded-full border border-slate-200 text-xs font-bold select-none">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                currentUser?.role === 'trainer' ? 'bg-blue-600' : 'bg-emerald-600'
-              }`}
-            ></span>
-            <span className="capitalize">
-              {currentUser?.role === 'trainer' ? 'Trainer Portal' : 'Client Portal'}
-            </span>
-          </div>
-        )}
+        ) : null}
 
-        {/* Right side: Native Actions (Install PWA + Notification Bell + Log Out) */}
+        {/* Right side: Native Actions (Direct Server Refresh + Install PWA + Notification Bell + Log Out) */}
         <div className="flex items-center space-x-2 shrink-0">
-          <PWAInstallButton variant="header" />
+          {/* Direct Server Refresh Button - Bypasses Local Cache */}
+          <button
+            onClick={handleServerRefresh}
+            disabled={isRefreshingServerData}
+            className="h-10 px-2.5 sm:px-3 rounded-2xl bg-blue-50/90 hover:bg-blue-100 text-blue-800 border border-blue-200/80 flex items-center space-x-1.5 transition-all cursor-pointer shadow-2xs font-extrabold text-xs disabled:opacity-60"
+            title={lastServerSyncTime ? `Last refreshed directly from server at ${lastServerSyncTime} GST. Click to force fresh read.` : 'Directly query and refresh all records fresh from Firestore backend'}
+            aria-label="Refresh from server"
+          >
+            <RefreshCw className={`w-4 h-4 text-blue-600 shrink-0 ${isRefreshingServerData ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">
+              {isRefreshingServerData ? 'Fetching Server...' : 'Refresh Server'}
+            </span>
+          </button>
+
+          <div className="hidden sm:block">
+            <PWAInstallButton variant="header" />
+          </div>
 
           {/* Notification Bell Button - directly opens Notifications Center */}
           <button
@@ -238,18 +246,26 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </button>
 
-          {/* Native Log Out Button */}
+          {/* Native Log Out Button (Hidden on Mobile, Visible on Tablet/Desktop) */}
           <button
             onClick={() => logout()}
-            className="h-10 px-3 rounded-2xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 flex items-center space-x-1.5 transition-all cursor-pointer shadow-2xs font-bold text-xs"
+            className="hidden sm:flex h-10 px-3 rounded-2xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 items-center space-x-1.5 transition-all cursor-pointer shadow-2xs font-bold text-xs"
             title="Log Out of Waiter Walk"
             aria-label="Log Out"
           >
             <LogOut className="w-4 h-4 text-red-600 shrink-0" />
-            <span className="hidden sm:inline">Log Out</span>
+            <span>Log Out</span>
           </button>
         </div>
       </div>
+
+      {/* Floating Server Refresh Toast */}
+      {refreshFeedback && (
+        <div className="fixed top-18 right-4 sm:right-8 bg-slate-950 text-white px-4 py-2.5 rounded-2xl text-xs font-bold shadow-2xl border border-slate-700 flex items-center space-x-2 animate-in fade-in slide-in-from-top-3 z-50">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{refreshFeedback}</span>
+        </div>
+      )}
     </header>
   );
 };

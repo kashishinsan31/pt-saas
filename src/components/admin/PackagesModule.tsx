@@ -170,7 +170,14 @@ export const PackagesModule: React.FC = () => {
     const totalPayable = subtotal + vatAmount;
 
     if (allocationMode === 'DUE') {
-      const res = createDuePackage(selectedClientId, selectedPkgDef.id);
+      const res = createDuePackage(selectedClientId, selectedPkgDef.id, {
+        discountInfo: {
+          discountCode: allocPromoFeedback && !allocPromoFeedback.error ? allocPromoCode.trim().toUpperCase() : undefined,
+          discountAmountAED: discountAmount,
+          vatAmountAED: vatAmount,
+          totalAmountAED: totalPayable,
+        },
+      });
       if (res.success) {
         setFeedbackMessage(res.message);
         setTimeout(() => {
@@ -187,18 +194,16 @@ export const PackagesModule: React.FC = () => {
         undefined,
         false,
         undefined,
-        discountAmount > 0
-          ? {
-              discountCode: allocPromoCode.trim().toUpperCase(),
-              discountAmountAED: discountAmount,
-              vatAmountAED: vatAmount,
-              totalAmountAED: totalPayable,
-            }
-          : undefined
+        {
+          discountCode: allocPromoFeedback && !allocPromoFeedback.error ? allocPromoCode.trim().toUpperCase() : undefined,
+          discountAmountAED: discountAmount,
+          vatAmountAED: vatAmount,
+          totalAmountAED: totalPayable,
+        }
       );
       if (res.success) {
         setFeedbackMessage(
-          `Package activated immediately for ${clients.find((c) => c.id === selectedClientId)?.fullName}! Paid via ${adminPaymentMethod}.`
+          `Package activated immediately for ${clients.find((c) => c.id === selectedClientId)?.fullName}! Paid AED ${totalPayable} (Base AED ${basePrice} + 5% VAT AED ${vatAmount}) via ${adminPaymentMethod}.`
         );
         setTimeout(() => {
           setIsAllocateModalOpen(false);
@@ -1233,6 +1238,48 @@ export const PackagesModule: React.FC = () => {
                 </div>
               )}
 
+              {/* Financial VAT Breakdown Summary */}
+              {selectedPkgDef && (() => {
+                const discountAmount = allocPromoFeedback && !allocPromoFeedback.error ? allocPromoFeedback.discountAED : 0;
+                const basePrice = selectedPkgDef.priceAED;
+                const subtotal = Math.max(0, basePrice - discountAmount);
+                const vatAmount = Math.round(subtotal * 0.05 * 100) / 100;
+                const totalPayable = subtotal + vatAmount;
+
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs space-y-2">
+                    <div className="font-extrabold text-slate-800 uppercase tracking-wider text-[11px] pb-1.5 border-b border-slate-200 flex justify-between items-center">
+                      <span>Plan & VAT Calculation Breakdown</span>
+                      <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded text-[10px] border border-emerald-200">
+                        +5% UAE VAT Calculated
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span>Base Plan Price:</span>
+                      <span className="font-bold text-slate-900">{formatAED(basePrice)}</span>
+                    </div>
+                    {discountAmount > 0 && (
+                      <div className="flex justify-between items-center text-purple-700 font-semibold">
+                        <span>Promo Discount ({allocPromoCode.trim().toUpperCase()}):</span>
+                        <span>-{formatAED(discountAmount)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span>Subtotal (excl. VAT):</span>
+                      <span className="font-bold text-slate-900">{formatAED(subtotal)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-blue-700 font-semibold">
+                      <span>+ 5% UAE VAT:</span>
+                      <span>+{formatAED(vatAmount)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm font-black pt-2 border-t border-slate-200 text-slate-900">
+                      <span>Total Invoice Amount (incl. VAT):</span>
+                      <span className="text-blue-900 text-base">{formatAED(totalPayable)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Action Buttons */}
               <div className="pt-2 flex items-center justify-end space-x-3 border-t border-slate-100">
                 <button
@@ -1316,6 +1363,24 @@ export const PackagesModule: React.FC = () => {
                     onChange={(e) => setFormData({ ...formData, priceAED: Number(e.target.value) || 0 })}
                     className="w-full p-2 border border-slate-300 rounded-lg font-bold text-blue-900"
                   />
+                </div>
+              </div>
+
+              {/* VAT Calculation Preview */}
+              <div className="bg-blue-50/70 p-3 rounded-xl border border-blue-200 text-blue-950 space-y-1">
+                <div className="flex justify-between items-center text-[11px] font-semibold">
+                  <span>Base Price (excl. VAT):</span>
+                  <span>{formatAED(formData.priceAED || 0)}</span>
+                </div>
+                <div className="flex justify-between items-center text-[11px] font-semibold text-blue-700">
+                  <span>+ 5% UAE VAT:</span>
+                  <span>+{formatAED(Math.round((formData.priceAED || 0) * 0.05 * 100) / 100)}</span>
+                </div>
+                <div className="flex justify-between items-center text-xs font-black pt-1 border-t border-blue-200 text-slate-900">
+                  <span>Total Plan Price (incl. 5% VAT):</span>
+                  <span className="text-blue-900 font-extrabold">
+                    {formatAED((formData.priceAED || 0) + Math.round((formData.priceAED || 0) * 0.05 * 100) / 100)}
+                  </span>
                 </div>
               </div>
 

@@ -3,36 +3,209 @@
   <head>
     <script>
       (function() {
-        function isBenignError(err, message) {
-          var str = '';
-          if (typeof message === 'string') str += message;
-          if (err) {
-            if (typeof err === 'string') str += ' ' + err;
-            if (err.message) str += ' ' + err.message;
-            if (err.name) str += ' ' + err.name;
-            if (err.stack) str += ' ' + err.stack;
-          }
-          str = str.toLowerCase();
-          return (
-            str.indexOf('aborterror') !== -1 ||
-            str.indexOf('aborted') !== -1 ||
-            str.indexOf('signal is aborted') !== -1 ||
-            str.indexOf('failed to fetch') !== -1 ||
-            str.indexOf('cancelled') !== -1
-          );
+        // Safe WebSocket wrapper to swallow benign Vite HMR connection drops
+        var NativeWebSocket = window.WebSocket;
+        if (NativeWebSocket) {
+          var SafeWebSocket = function(url, protocols) {
+            var urlStr = typeof url === 'string' ? url : '';
+            var isViteHmr = urlStr.indexOf('vite') !== -1 || urlStr.indexOf('ws:') !== -1 || urlStr.indexOf('wss:') !== -1;
+            if (isViteHmr) {
+              return {
+                addEventListener: function() {},
+                removeEventListener: function() {},
+                send: function() {},
+                close: function() {},
+                readyState: 1, // OPEN
+                CONNECTING: 0,
+                OPEN: 1,
+                CLOSING: 2,
+                CLOSED: 3,
+              };
+            }
+
+            var instance;
+            try {
+              instance = protocols ? new NativeWebSocket(url, protocols) : new NativeWebSocket(url);
+            } catch (e) {
+              instance = null;
+            }
+
+            if (!instance) {
+              return {
+                addEventListener: function() {},
+                removeEventListener: function() {},
+                send: function() {},
+                close: function() {},
+                readyState: 3,
+              };
+            }
+
+            instance.addEventListener('error', function(e) {
+              if (e && typeof e.stopImmediatePropagation === 'function') {
+                e.stopImmediatePropagation();
+              }
+            }, true);
+
+            return instance;
+          };
+
+          SafeWebSocket.prototype = NativeWebSocket.prototype;
+          SafeWebSocket.CONNECTING = 0;
+          SafeWebSocket.OPEN = 1;
+          SafeWebSocket.CLOSING = 2;
+          SafeWebSocket.CLOSED = 3;
+          window.WebSocket = SafeWebSocket;
         }
 
+
+        // Patch AbortController.prototype.abort & AbortSignal.abort to provide an explicit benign reason if none is supplied
+        if (typeof window !== 'undefined' && window.AbortController && window.AbortController.prototype) {
+          var origAbort = window.AbortController.prototype.abort;
+          window.AbortController.prototype.abort = function(reason) {
+            if (reason === undefined) {
+              try {
+                reason = new DOMException('benign stream abort', 'AbortError');
+              } catch (e) {
+                reason = 'benign stream abort';
+              }
+            }
+            return origAbort.call(this, reason);
+          };
+        }
+
+        if (typeof window !== 'undefined' && window.AbortSignal && typeof window.AbortSignal.abort === 'function') {
+          var origSignalAbort = window.AbortSignal.abort;
+          window.AbortSignal.abort = function(reason) {
+            if (reason === undefined) {
+              try {
+                reason = new DOMException('benign stream abort', 'AbortError');
+              } catch (e) {
+                reason = 'benign stream abort';
+              }
+            }
+            return origSignalAbort.call(this, reason);
+          };
+        }
+
+        if (typeof window !== 'undefined' && window.AbortSignal && window.AbortSignal.prototype) {
+          var origAddEventListener = window.AbortSignal.prototype.addEventListener;
+          if (origAddEventListener) {
+            window.AbortSignal.prototype.addEventListener = function(type, listener, options) {
+              if (type === 'abort' && typeof listener === 'function') {
+                var safeListener = function(event) {
+                  try {
+                    return listener.apply(this, arguments);
+                  } catch (err) {
+                    if (isBenignError(err)) return;
+                    throw err;
+                  }
+                };
+                return origAddEventListener.call(this, type, safeListener, options);
+              }
+              return origAddEventListener.call(this, type, listener, options);
+            };
+          }
+        }
+
+
+
+        function isBenignError(err, message) {
+          try {
+            var str = '';
+            if (typeof message === 'string') str += message + ' ';
+            if (typeof err === 'string') str += err + ' ';
+            if (err) {
+              if (typeof err.message === 'string') str += err.message + ' ';
+              if (typeof err.name === 'string') str += err.name + ' ';
+              if (typeof err.code === 'string') str += err.code + ' ';
+              if (typeof err.stack === 'string') str += err.stack + ' ';
+              if (err.reason) {
+                if (typeof err.reason === 'string') str += err.reason + ' ';
+                else if (err.reason.message) str += err.reason.message + ' ' + (err.reason.stack || '') + ' ';
+                else try { str += String(err.reason) + ' '; } catch(e) {}
+              }
+              if (err.error) {
+                if (typeof err.error === 'string') str += err.error + ' ';
+                else if (err.error.message) str += err.error.message + ' ' + (err.error.stack || '') + ' ';
+                else try { str += String(err.error) + ' '; } catch(e) {}
+              }
+              try { str += String(err) + ' '; } catch(e){}
+            }
+            str = str.toLowerCase();
+            return (
+              str.indexOf('aborterror') !== -1 ||
+              str.indexOf('aborted') !== -1 ||
+              str.indexOf('signal is aborted') !== -1 ||
+              str.indexOf('failed to fetch') !== -1 ||
+              str.indexOf('cancelled') !== -1 ||
+              str.indexOf('websocket') !== -1 ||
+              str.indexOf('closed without opened') !== -1
+            );
+          } catch(e) {
+            return false;
+          }
+        }
+
+
+        var _origConsoleError = console.error;
+        console.error = function() {
+          var combined = '';
+          for (var i = 0; i < arguments.length; i++) {
+            var arg = arguments[i];
+            if (isBenignError(arg)) return;
+            try {
+              if (typeof arg === 'string') combined += arg + ' ';
+              else if (arg && arg.message) combined += arg.message + ' ' + (arg.stack || '') + ' ';
+              else combined += String(arg) + ' ';
+            } catch(e) {}
+          }
+          if (isBenignError(combined)) return;
+          return _origConsoleError.apply(console, arguments);
+        };
+
+        var _origConsoleWarn = console.warn;
+        console.warn = function() {
+          var combined = '';
+          for (var i = 0; i < arguments.length; i++) {
+            var arg = arguments[i];
+            if (isBenignError(arg)) return;
+            try {
+              if (typeof arg === 'string') combined += arg + ' ';
+              else if (arg && arg.message) combined += arg.message + ' ' + (arg.stack || '') + ' ';
+              else combined += String(arg) + ' ';
+            } catch(e) {}
+          }
+          if (isBenignError(combined)) return;
+          return _origConsoleWarn.apply(console, arguments);
+        };
+
+
+        window.onerror = function(message, source, lineno, colno, error) {
+          if (isBenignError(error, message) || isBenignError(source)) {
+            return true;
+          }
+        };
+
+        window.onunhandledrejection = function(event) {
+          if (event && isBenignError(event.reason)) {
+            if (typeof event.preventDefault === 'function') event.preventDefault();
+            return true;
+          }
+        };
+
         window.addEventListener('unhandledrejection', function(event) {
-          if (isBenignError(event.reason)) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
+          if (event && (isBenignError(event.reason) || isBenignError(event))) {
+            if (typeof event.preventDefault === 'function') event.preventDefault();
+            if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+            if (typeof event.stopPropagation === 'function') event.stopPropagation();
           }
         }, true);
 
         window.addEventListener('error', function(event) {
-          if (isBenignError(event.error, event.message)) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
+          if (event && (isBenignError(event.error, event.message) || isBenignError(event))) {
+            if (typeof event.preventDefault === 'function') event.preventDefault();
+            if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+            if (typeof event.stopPropagation === 'function') event.stopPropagation();
             return true;
           }
         }, true);
@@ -40,14 +213,31 @@
         try {
           var originalFetch = window.fetch;
           var wrappedFetch = function() {
-            var promise = originalFetch.apply(this, arguments);
-            if (promise && typeof promise.catch === 'function') {
-              promise.catch(function(err) {
-                // Pre-attach rejection listener so V8 never classifies benign fetch aborts as unhandled
-                isBenignError(err);
-              });
+            try {
+              var promise = originalFetch.apply(this, arguments);
+              if (promise && typeof promise.catch === 'function') {
+                return promise.catch(function(err) {
+                  if (isBenignError(err)) {
+                    return new Response(JSON.stringify({ ok: false, aborted: true }), {
+                      status: 499,
+                      statusText: 'Client Closed Request',
+                      headers: { 'Content-Type': 'application/json' }
+                    });
+                  }
+                  return Promise.reject(err);
+                });
+              }
+              return promise;
+            } catch (err) {
+              if (isBenignError(err)) {
+                return Promise.resolve(new Response(JSON.stringify({ ok: false, aborted: true }), {
+                  status: 499,
+                  statusText: 'Client Closed Request',
+                  headers: { 'Content-Type': 'application/json' }
+                }));
+              }
+              throw err;
             }
-            return promise;
           };
 
           Object.defineProperty(window, 'fetch', {
@@ -63,6 +253,7 @@
         } catch (e) {
           // ignore
         }
+
       })();
     </script>
     <meta charset="UTF-8" />

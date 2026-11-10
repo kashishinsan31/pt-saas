@@ -11,6 +11,17 @@ export interface User {
   createdAt: string;
 }
 
+export interface BodyMetricEntry {
+  id: string;
+  date: string; // YYYY-MM-DD
+  weightKg: number;
+  muscleMassKg?: number;
+  bodyFatPercentage?: number;
+  habitConsistencyScore?: number; // 0 - 100%
+  waterLitres?: number;
+  notes?: string;
+}
+
 export interface Client {
   id: string; // e.g. WW-CL-1001
   userId?: string;
@@ -35,6 +46,7 @@ export interface Client {
   stripeCustomerId?: string;
   healthDeclaration?: HealthDeclaration;
   healthIssues?: HealthIssueNote[];
+  bodyMetrics?: BodyMetricEntry[];
   createdAt: string;
 }
 
@@ -116,14 +128,16 @@ export interface PackageDefinition {
   status: 'Active' | 'Inactive';
 }
 
-export type ClientPackageStatus = 'Active' | 'Pending Payment' | 'Completed' | 'Expired' | 'Cancelled';
+export type ClientPackageStatus = 'Active' | 'Pending Payment' | 'Completed' | 'Expired' | 'Cancelled' | 'Superseded';
 
 export interface ClientPackage {
   id: string; // e.g. PKG-2026-901
   clientId: string;
   packageDefinitionId: string;
   packageName: string;
-  packagePriceAED: number;
+  basePriceAED?: number; // Base price before VAT
+  vatAmountAED?: number; // 5% UAE VAT
+  packagePriceAED: number; // Total price including VAT
   totalSessions: number;
   completedSessions: number;
   refundedSessions: number;

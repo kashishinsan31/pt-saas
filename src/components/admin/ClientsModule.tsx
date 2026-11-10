@@ -39,6 +39,7 @@ import {
   Stethoscope,
   Tag,
   Copy,
+  ArrowRightLeft,
 } from 'lucide-react';
 
 export const ClientsModule: React.FC = () => {
@@ -47,6 +48,7 @@ export const ClientsModule: React.FC = () => {
     users,
     clients,
     trainers,
+    packageDefinitions,
     clientPackages,
     bookings,
     payments,
@@ -57,6 +59,7 @@ export const ClientsModule: React.FC = () => {
     deleteClientHealthIssue,
     updateClientHealthIssue,
     extendPackageExpiry,
+    switchClientPackage,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -166,6 +169,48 @@ export const ClientsModule: React.FC = () => {
     }
 
     setIsEditModalOpen(false);
+  };
+
+  // Switch Plan State & Handler (Admin Only)
+  const [isSwitchModalOpen, setIsSwitchModalOpen] = useState(false);
+  const [switchTargetClient, setSwitchTargetClient] = useState<Client | null>(null);
+  const [switchPackageDefId, setSwitchPackageDefId] = useState('');
+  const [switchCarryOver, setSwitchCarryOver] = useState(true);
+  const [switchActivationMode, setSwitchActivationMode] = useState<'PAID' | 'DUE'>('PAID');
+  const [switchPaymentMethod, setSwitchPaymentMethod] = useState<'Card' | 'Cash' | 'Bank Transfer'>('Card');
+  const [switchFeedback, setSwitchFeedback] = useState<string | null>(null);
+
+  const openSwitchPlanModal = (client: Client) => {
+    setSwitchTargetClient(client);
+    const activePkg = clientPackages.find((p) => p.clientId === client.id && p.status === 'Active');
+    const defaultDef = packageDefinitions.find((p) => p.id !== activePkg?.packageDefinitionId && p.status === 'Active') || packageDefinitions[0];
+    setSwitchPackageDefId(defaultDef?.id || '');
+    setSwitchCarryOver(true);
+    setSwitchActivationMode('PAID');
+    setSwitchPaymentMethod('Card');
+    setSwitchFeedback(null);
+    setIsSwitchModalOpen(true);
+  };
+
+  const handleConfirmSwitchPlan = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!switchTargetClient || !switchPackageDefId) return;
+
+    const res = switchClientPackage(switchTargetClient.id, switchPackageDefId, {
+      activationMode: switchActivationMode,
+      paymentMethod: switchPaymentMethod,
+      carryOverCredits: switchCarryOver,
+    });
+
+    if (res.success) {
+      setSwitchFeedback(res.message);
+      setTimeout(() => {
+        setIsSwitchModalOpen(false);
+        setSwitchFeedback(null);
+      }, 2200);
+    } else {
+      setSwitchFeedback(res.message);
+    }
   };
 
   const openEditModal = (client: Client) => {
@@ -481,6 +526,13 @@ export const ClientsModule: React.FC = () => {
                     {currentUser?.role === 'admin' && (
                       <div className="flex items-center space-x-1 shrink-0">
                         <button
+                          onClick={() => openSwitchPlanModal(client)}
+                          className="p-2 text-blue-600 hover:text-blue-900 hover:bg-blue-50 rounded-xl transition-colors border border-blue-200"
+                          title="Switch / Change Plan"
+                        >
+                          <ArrowRightLeft className="w-4 h-4" />
+                        </button>
+                        <button
                           onClick={() => openEditModal(client)}
                           className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors border border-slate-200"
                           title="Edit Client"
@@ -613,6 +665,13 @@ export const ClientsModule: React.FC = () => {
 
                             {currentUser?.role === 'admin' && (
                               <>
+                                <button
+                                  onClick={() => openSwitchPlanModal(client)}
+                                  className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                  title="Switch / Change Plan"
+                                >
+                                  <ArrowRightLeft className="w-4 h-4" />
+                                </button>
                                 <button
                                   onClick={() => openEditModal(client)}
                                   className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
@@ -1122,6 +1181,29 @@ export const ClientsModule: React.FC = () => {
 
               {activeProfileTab === 'package' && (
                 <div className="space-y-4">
+                  {/* Plan Switcher Bar */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200/80 p-4 rounded-2xl shadow-xs">
+                    <div>
+                      <div className="font-extrabold text-blue-950 text-sm flex items-center space-x-2">
+                        <span>Personal Training Plan Management</span>
+                        <span className="bg-blue-600 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">Admin Authority</span>
+                      </div>
+                      <div className="text-xs text-blue-700 mt-0.5">
+                        Upgrade, switch plans with 5% VAT calculation, or extend session validity.
+                      </div>
+                    </div>
+                    {currentUser?.role === 'admin' && (
+                      <button
+                        type="button"
+                        onClick={() => openSwitchPlanModal(selectedClient)}
+                        className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center justify-center space-x-1.5 transition-all hover:scale-102 cursor-pointer shrink-0"
+                      >
+                        <ArrowRightLeft className="w-4 h-4" />
+                        <span>Switch Client Plan</span>
+                      </button>
+                    )}
+                  </div>
+
                   {clientPackages
                     .filter((p) => p.clientId === selectedClient.id)
                     .map((pkg) => (
@@ -1706,6 +1788,253 @@ export const ClientsModule: React.FC = () => {
           }}
           initialNote={editingIssue}
         />
+      )}
+
+      {/* Switch / Change Client Plan Modal */}
+      {isSwitchModalOpen && switchTargetClient && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200">
+            <div className="bg-gradient-to-r from-blue-900 to-indigo-950 p-6 text-white flex justify-between items-start">
+              <div>
+                <span className="text-[10px] font-black uppercase text-blue-300 tracking-wider">
+                  Admin Authority • Plan Switcher
+                </span>
+                <h3 className="font-black text-white text-lg mt-0.5">
+                  Switch Plan for {switchTargetClient.fullName}
+                </h3>
+                <p className="text-xs text-blue-200 font-mono mt-0.5">
+                  Client ID: {switchTargetClient.id} • {switchTargetClient.communityName}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSwitchModalOpen(false)}
+                className="text-white/60 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmSwitchPlan} className="p-6 space-y-4 text-xs">
+              {switchFeedback && (
+                <div className={`p-3.5 rounded-xl border text-xs font-bold flex items-center space-x-2 ${
+                  switchFeedback.toLowerCase().includes('success') || switchFeedback.toLowerCase().includes('switched')
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                    : 'bg-red-50 border-red-300 text-red-800'
+                }`}>
+                  <CheckCircle className="w-4 h-4 shrink-0" />
+                  <span>{switchFeedback}</span>
+                </div>
+              )}
+
+              {/* Current Active Plan Status */}
+              {(() => {
+                const currentPkg = clientPackages.find((p) => p.clientId === switchTargetClient.id && p.status === 'Active');
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
+                    <span className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider block mb-1">
+                      Current Active Plan
+                    </span>
+                    {currentPkg ? (
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <div className="font-extrabold text-slate-900 text-sm">{currentPkg.packageName}</div>
+                          <div className="text-[11px] text-slate-500 mt-0.5">
+                            Remaining Sessions: <strong className="text-emerald-700">{currentPkg.remainingSessions}</strong> / {currentPkg.totalSessions} • Expires {currentPkg.expiryDate}
+                          </div>
+                        </div>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          Active
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="text-slate-500 italic text-[11px]">No active training package on account.</div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Select New Target Plan */}
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1.5">
+                  1. Select New Target Package Offering
+                </label>
+                <select
+                  value={switchPackageDefId}
+                  onChange={(e) => setSwitchPackageDefId(e.target.value)}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl font-bold bg-white text-slate-900 focus:ring-2 focus:ring-blue-600 outline-none"
+                  required
+                >
+                  {packageDefinitions.map((def) => (
+                    <option key={def.id} value={def.id}>
+                      {def.name} — {def.sessionCount} Sessions @ AED {def.priceAED} base (+5% VAT) ({def.validityDays || 30} Days)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* VAT & Price Calculation Breakdown */}
+              {(() => {
+                const targetDef = packageDefinitions.find((p) => p.id === switchPackageDefId);
+                if (!targetDef) return null;
+                const base = targetDef.priceAED;
+                const vat = Math.round(base * 0.05 * 100) / 100;
+                const total = base + vat;
+                const currentPkg = clientPackages.find((p) => p.clientId === switchTargetClient.id && p.status === 'Active');
+                const carried = (switchCarryOver && currentPkg) ? currentPkg.remainingSessions : 0;
+                const totalNewCredits = targetDef.sessionCount + carried;
+
+                return (
+                  <div className="space-y-3">
+                    <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-4 space-y-2">
+                      <div className="font-extrabold text-blue-950 uppercase tracking-wider text-[11px] pb-1 border-b border-blue-200/80 flex justify-between items-center">
+                        <span>Price & 5% UAE VAT Breakdown</span>
+                        <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded text-[10px] border border-emerald-200">
+                          VAT Auto-Calculated
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-600">
+                        <span>Base Plan Price:</span>
+                        <span className="font-bold text-slate-900">{formatAED(base)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-blue-800 font-semibold">
+                        <span>+ 5% UAE VAT:</span>
+                        <span>+{formatAED(vat)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-sm font-black pt-1.5 border-t border-blue-200 text-slate-900">
+                        <span>Total Invoice Amount (incl. VAT):</span>
+                        <span className="text-blue-900 text-base">{formatAED(total)}</span>
+                      </div>
+                    </div>
+
+                    {/* Credit Allocation Preview */}
+                    <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-3.5 space-y-2">
+                      <div className="font-extrabold text-emerald-950 uppercase tracking-wider text-[11px]">
+                        Session Credit Allocation
+                      </div>
+                      <div className="flex justify-between items-center text-slate-700">
+                        <span>New Plan Credits:</span>
+                        <span className="font-bold">{targetDef.sessionCount} Sessions</span>
+                      </div>
+                      {currentPkg && currentPkg.remainingSessions > 0 && (
+                        <label className="flex items-center space-x-2 cursor-pointer pt-1 border-t border-emerald-200">
+                          <input
+                            type="checkbox"
+                            checked={switchCarryOver}
+                            onChange={(e) => setSwitchCarryOver(e.target.checked)}
+                            className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                          />
+                          <span className="text-emerald-900 font-semibold">
+                            Carry forward unused {currentPkg.remainingSessions} sessions from current plan
+                          </span>
+                        </label>
+                      )}
+                      <div className="flex justify-between items-center text-xs font-black text-emerald-900 pt-1 border-t border-emerald-200">
+                        <span>Total New Available Balance:</span>
+                        <span className="text-sm font-black">{totalNewCredits} Sessions</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Payment & Activation Mode */}
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1.5">
+                  2. Payment & Activation Mode
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <label
+                    onClick={() => setSwitchActivationMode('PAID')}
+                    className={`p-3 rounded-xl border cursor-pointer flex flex-col justify-between ${
+                      switchActivationMode === 'PAID'
+                        ? 'bg-blue-50 border-blue-300 text-blue-900'
+                        : 'bg-slate-50 border-slate-200 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="radio"
+                        name="switchActivationMode"
+                        checked={switchActivationMode === 'PAID'}
+                        onChange={() => setSwitchActivationMode('PAID')}
+                        className="text-blue-600"
+                      />
+                      <span className="font-bold text-xs">Direct Payment</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 mt-1">
+                      Mark as Paid & immediately activate sessions
+                    </span>
+                  </label>
+
+                  <label
+                    onClick={() => setSwitchActivationMode('DUE')}
+                    className={`p-3 rounded-xl border cursor-pointer flex flex-col justify-between ${
+                      switchActivationMode === 'DUE'
+                        ? 'bg-amber-50 border-amber-300 text-amber-900'
+                        : 'bg-slate-50 border-slate-200 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="radio"
+                        name="switchActivationMode"
+                        checked={switchActivationMode === 'DUE'}
+                        onChange={() => setSwitchActivationMode('DUE')}
+                        className="text-amber-600"
+                      />
+                      <span className="font-bold text-xs">Invoice (Pending)</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 mt-1">
+                      Client pays via card in Client Portal
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {switchActivationMode === 'PAID' && (
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1.5">
+                  <label className="block font-bold text-slate-700 uppercase text-[10px]">
+                    Payment Method Received
+                  </label>
+                  <div className="flex space-x-3">
+                    {(['Card', 'Cash', 'Bank Transfer'] as const).map((method) => (
+                      <label key={method} className="flex items-center space-x-1.5 cursor-pointer font-semibold text-slate-700">
+                        <input
+                          type="radio"
+                          name="switchPaymentMethod"
+                          value={method}
+                          checked={switchPaymentMethod === method}
+                          onChange={() => setSwitchPaymentMethod(method)}
+                          className="text-blue-600 focus:ring-blue-500"
+                        />
+                        <span>{method}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Modal Footer Actions */}
+              <div className="pt-3 flex justify-end space-x-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsSwitchModalOpen(false)}
+                  className="px-4 py-2 border border-slate-300 rounded-xl text-slate-700 font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-md cursor-pointer flex items-center space-x-1.5"
+                >
+                  <ArrowRightLeft className="w-4 h-4" />
+                  <span>Confirm Plan Switch</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

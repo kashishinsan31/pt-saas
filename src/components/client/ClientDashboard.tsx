@@ -30,16 +30,166 @@ import {
   AlertCircle,
   Star,
   MessageSquare,
+  Dumbbell,
+  BookOpen,
+  Apple,
+  Utensils,
+  Flame,
+  Rocket,
+  BellRing,
+  ChevronRight,
+  Target,
+  Compass,
+  ListChecks,
 } from 'lucide-react';
 import { StripeCheckoutModal } from '../stripe/StripeCheckoutModal';
 import { processStripeApiCharge, getStripe, createStripeCustomer } from '../../services/stripeApi';
 import { DashboardSlider } from '../common/DashboardSlider';
 import { HealthDeclarationModal } from '../common/HealthDeclarationModal';
 import { AddHealthIssueModal } from '../common/AddHealthIssueModal';
+import { ProgressAnalyticsSection } from './ProgressAnalyticsSection';
+import { LogBodyMetricModal } from './LogBodyMetricModal';
 
 interface ClientDashboardProps {
-  initialSection?: 'dashboard' | 'sessions' | 'payments' | 'subscriptions';
+  initialSection?: 'dashboard' | 'sessions' | 'payments' | 'subscriptions' | 'health' | 'upcoming';
 }
+
+export interface UpcomingFeatureItem {
+  id: string;
+  title: string;
+  category: 'Workout' | 'Diet' | 'Habit';
+  version: string;
+  eta: string;
+  icon: any;
+  color: string;
+  accentBg: string;
+  badgeBg: string;
+  description: string;
+  keyHighlights: string[];
+  mockData: {
+    stat1: { label: string; value: string };
+    stat2: { label: string; value: string };
+    previewSnippet: string;
+  };
+}
+
+const UPCOMING_FEATURES: UpcomingFeatureItem[] = [
+  {
+    id: 'workout-tracker',
+    title: 'Workout Tracker',
+    category: 'Workout',
+    version: 'v2.5',
+    eta: 'Q1 2026',
+    icon: Dumbbell,
+    color: 'from-blue-600 to-indigo-600',
+    accentBg: 'bg-blue-50 text-blue-700 border-blue-200',
+    badgeBg: 'bg-blue-600 text-white',
+    description: 'Log sets, reps, weights, RPE, and rest timers in real-time during your personal training sessions. Track personal records (PRs), 1RM estimates, and volume progress graphs.',
+    keyHighlights: [
+      'Live set counter & automatic rest timer',
+      'Personal Record (PR) badges & 1RM calculator',
+      'Strength volume & muscle group load breakdown',
+      'Direct real-time sync with your coach\'s panel',
+    ],
+    mockData: {
+      stat1: { label: 'Tracked Exercises', value: '45+ Sets' },
+      stat2: { label: 'Est. 1RM Bench', value: '110 kg' },
+      previewSnippet: 'Bench Press • 4 Sets x 10 Reps @ 80kg • Rest 90s',
+    },
+  },
+  {
+    id: 'workout-library',
+    title: 'Workout Library',
+    category: 'Workout',
+    version: 'v2.5',
+    eta: 'Q1 2026',
+    icon: BookOpen,
+    color: 'from-indigo-600 to-purple-600',
+    accentBg: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+    badgeBg: 'bg-indigo-600 text-white',
+    description: '500+ HD video exercise demonstrations, 3D muscle heatmaps, proper execution form cues, and custom workout routines assigned by your Waiter Walk coach.',
+    keyHighlights: [
+      '500+ 4K video demonstrations with form cues',
+      'Anatomical 3D muscle targeting heatmaps',
+      'Coach-curated routines for home, gym, or outdoor',
+      'Equipment filters (Dumbbells, Cables, Bodyweight)',
+    ],
+    mockData: {
+      stat1: { label: 'Library Size', value: '500+ Videos' },
+      stat2: { label: 'Target Muscles', value: '18 Groups' },
+      previewSnippet: 'Barbell Bulgarian Split Squat • Quadriceps & Glutes',
+    },
+  },
+  {
+    id: 'diet-tracker',
+    title: 'Diet Tracker',
+    category: 'Diet',
+    version: 'v2.6',
+    eta: 'Q2 2026',
+    icon: Apple,
+    color: 'from-emerald-600 to-teal-600',
+    accentBg: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    badgeBg: 'bg-emerald-600 text-white',
+    description: 'Daily calorie & macro counter (Protein, Carbs, Fats), barcode scanner for UAE products, water intake log, and automated nutrition streak scoring.',
+    keyHighlights: [
+      'Macro counter (Protein, Carbs, Fats, Fiber)',
+      'UAE barcode scanner for Carrefour, Spinneys & Lulu products',
+      'Hydration logging & water goal reminders',
+      'Trainer macro approval & nutrition feedback',
+    ],
+    mockData: {
+      stat1: { label: 'Daily Goal', value: '2,200 kcal' },
+      stat2: { label: 'Protein Target', value: '165 g' },
+      previewSnippet: 'Grilled Chicken Breast & Quinoa • 45g Protein / 520 kcal',
+    },
+  },
+  {
+    id: 'diet-library',
+    title: 'Diet Library',
+    category: 'Diet',
+    version: 'v2.6',
+    eta: 'Q2 2026',
+    icon: Utensils,
+    color: 'from-amber-500 to-orange-600',
+    accentBg: 'bg-amber-50 text-amber-700 border-amber-200',
+    badgeBg: 'bg-amber-600 text-white',
+    description: 'Dubai-tailored healthy recipes, chef prep guides, macro breakdowns, grocery lists, and dining-out recommendations for top UAE restaurants.',
+    keyHighlights: [
+      'Dubai-inspired healthy recipes with chef prep steps',
+      'Automated weekly grocery shopping list generator',
+      'Macro breakdowns for popular UAE dining spots',
+      'High-protein, Halal, Keto, and Vegan filter tags',
+    ],
+    mockData: {
+      stat1: { label: 'Recipes Available', value: '250+ Dishes' },
+      stat2: { label: 'Avg Prep Time', value: '15 Mins' },
+      previewSnippet: 'Arabic Spiced Salmon & Grilled Asparagus • 42g Protein',
+    },
+  },
+  {
+    id: 'habit-tracker',
+    title: 'Habit Tracker',
+    category: 'Habit',
+    version: 'v2.7',
+    eta: 'Q2 2026',
+    icon: Flame,
+    color: 'from-rose-600 to-pink-600',
+    accentBg: 'bg-rose-50 text-rose-700 border-rose-200',
+    badgeBg: 'bg-rose-600 text-white',
+    description: 'Daily habit streak counters, sleep duration monitoring, daily step goal tracking (10,000 steps), hydration reminders, and habit consistency scoring.',
+    keyHighlights: [
+      'Daily streak counters & milestone badges',
+      'Step goal sync (Apple Health & Google Fit)',
+      'Sleep quality & duration logging (8 hrs goal)',
+      'Coach habit accountability check-ins',
+    ],
+    mockData: {
+      stat1: { label: 'Current Streak', value: '14 Days' },
+      stat2: { label: 'Daily Step Goal', value: '10,000 Steps' },
+      previewSnippet: '8 Hrs Sleep • 3L Water • 10k Steps • Habit Score 98%',
+    },
+  },
+];
 
 export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection = 'dashboard' }) => {
   const {
@@ -90,14 +240,32 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
 
   const trainer = trainers.find((t) => t.id === client?.assignedTrainerId) || trainers[0];
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'sessions' | 'payments' | 'subscriptions' | 'health'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'progress' | 'upcoming' | 'sessions' | 'payments' | 'subscriptions' | 'health'>('overview');
   const [isHealthModalOpen, setIsHealthModalOpen] = useState(false);
   const [isAddIssueModalOpen, setIsAddIssueModalOpen] = useState(false);
+  const [isLogMetricModalOpen, setIsLogMetricModalOpen] = useState(false);
+
+  // Upcoming Features Roadmap state
+  const [notifiedFeatures, setNotifiedFeatures] = useState<string[]>([]);
+  const [selectedUpcomingFeatureModal, setSelectedUpcomingFeatureModal] = useState<any>(null);
+  const [featureFilter, setFeatureFilter] = useState<'All' | 'Workout' | 'Diet' | 'Habit'>('All');
+  const [betaSuccessMsg, setBetaSuccessMsg] = useState('');
+
+  const handleToggleNotification = (featureId: string) => {
+    if (notifiedFeatures.includes(featureId)) {
+      setNotifiedFeatures((prev) => prev.filter((id) => id !== featureId));
+    } else {
+      setNotifiedFeatures((prev) => [...prev, featureId]);
+      setBetaSuccessMsg('You have been added to the VIP Beta Access list for this feature!');
+      setTimeout(() => setBetaSuccessMsg(''), 3500);
+    }
+  };
 
   useEffect(() => {
     if (initialSection === 'payments') setActiveTab('payments');
     else if (initialSection === 'subscriptions') setActiveTab('subscriptions');
     else if (initialSection === 'sessions') setActiveTab('sessions');
+    else if (initialSection === 'upcoming') setActiveTab('upcoming');
     else setActiveTab('overview');
   }, [initialSection]);
 
@@ -745,11 +913,11 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
         </div>
       </div>
 
-      {/* Portal Navigation Tabs - Hidden in mobile mode, visible on tablet/desktop */}
-      <div className="hidden md:flex bg-white rounded-2xl border border-slate-200 shadow-xs p-1.5 overflow-x-auto gap-2">
+      {/* Portal Navigation Tabs */}
+      <div className="flex bg-white rounded-2xl border border-slate-200 shadow-xs p-1.5 overflow-x-auto gap-2">
         <button
           onClick={() => setActiveTab('overview')}
-          className={`py-2 px-3.5 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all text-center shrink-0 ${
+          className={`py-2 px-3.5 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all text-center shrink-0 cursor-pointer ${
             activeTab === 'overview'
               ? 'bg-blue-600 text-white shadow-xs'
               : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
@@ -757,6 +925,18 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
         >
           <Package className="w-4 h-4 shrink-0" />
           <span className="whitespace-nowrap">Package Overview</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('progress')}
+          className={`py-2 px-3.5 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all text-center shrink-0 cursor-pointer ${
+            activeTab === 'progress'
+              ? 'bg-emerald-600 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+          }`}
+        >
+          <Activity className="w-4 h-4 shrink-0 text-emerald-500" />
+          <span className="whitespace-nowrap">Progress & Body Analytics</span>
         </button>
 
         <button
@@ -811,6 +991,21 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
             <span className="text-[10px] text-emerald-600 font-extrabold ml-1">✓</span>
           )}
         </button>
+
+        <button
+          onClick={() => setActiveTab('upcoming')}
+          className={`py-2 px-3.5 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all text-center shrink-0 border ${
+            activeTab === 'upcoming'
+              ? 'bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 text-white shadow-md border-purple-400'
+              : 'text-purple-700 bg-purple-50/60 border-purple-200/80 hover:bg-purple-100/80'
+          }`}
+        >
+          <Sparkles className={`w-4 h-4 shrink-0 ${activeTab === 'upcoming' ? 'text-amber-300 animate-spin' : 'text-purple-600'}`} />
+          <span className="whitespace-nowrap">Upcoming Features</span>
+          <span className="text-[9px] bg-amber-400 text-slate-950 font-black px-1.5 py-0.5 rounded-full uppercase tracking-tight">
+            5 New
+          </span>
+        </button>
       </div>
 
       {/* Mobile Back Button (shown only on mobile when inside a sub-tab) */}
@@ -830,6 +1025,213 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
         <div className="space-y-6">
           {/* Featured Mobile App Slider */}
           <DashboardSlider onActionClick={(tab) => setActiveTab(tab as any)} />
+
+          {/* UPCOMING FEATURES ROADMAP BANNER */}
+          <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 rounded-3xl p-5 sm:p-7 text-white shadow-xl border border-indigo-500/30 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-80 h-80 bg-purple-600/15 rounded-full blur-3xl pointer-events-none"></div>
+            <div className="absolute bottom-0 left-0 w-80 h-80 bg-cyan-600/15 rounded-full blur-3xl pointer-events-none"></div>
+
+            <div className="relative z-10 space-y-5">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-indigo-500/20 pb-4">
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <span className="bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 font-black text-[10px] uppercase px-3 py-0.5 rounded-full tracking-wider shadow-xs">
+                      ✨ ROADMAP 2026
+                    </span>
+                    <span className="text-xs text-indigo-300 font-bold">5 Major Client Modules Coming Soon</span>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black text-white mt-1.5 tracking-tight flex items-center gap-2">
+                    Upcoming Client Fitness & Nutrition Tools
+                  </h2>
+                  <p className="text-xs text-slate-300 mt-1 max-w-2xl">
+                    We are launching Workout & Diet Trackers, Libraries, and Habit Tracking modules tailored for Dubai personal training clients. Request early VIP Beta access below!
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('upcoming')}
+                  className="px-4 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-black text-xs rounded-xl shadow-lg flex items-center justify-center space-x-1.5 transition-all hover:scale-105 shrink-0 cursor-pointer border border-purple-400/40"
+                >
+                  <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
+                  <span>View All 5 Roadmap Modules &rarr;</span>
+                </button>
+              </div>
+
+              {/* Grid of the 5 Features */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {/* 1. Workout Tracker */}
+                <div className="bg-slate-900/80 hover:bg-slate-800/90 border border-slate-800 hover:border-blue-500/50 p-4 rounded-2xl transition-all shadow-md group flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="w-10 h-10 rounded-xl bg-blue-600/20 border border-blue-500/40 text-blue-400 flex items-center justify-center">
+                        <Dumbbell className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                      </div>
+                      <span className="text-[10px] font-black bg-blue-500/20 text-blue-300 border border-blue-400/30 px-2 py-0.5 rounded-full uppercase">
+                        v2.5 • Q1 2026
+                      </span>
+                    </div>
+                    <h3 className="font-extrabold text-white text-base group-hover:text-blue-300 transition-colors">
+                      Workout Tracker
+                    </h3>
+                    <p className="text-xs text-slate-300 mt-1 line-clamp-2">
+                      Log sets, reps, weights, RPE & rest timers. Track personal records (PRs) and strength volume over time.
+                    </p>
+                  </div>
+                  <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
+                    <span className="text-[10px] text-slate-400 font-medium">Live Set Counter & PRs</span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleNotification('workout-tracker')}
+                      className={`text-[11px] font-bold px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                        notifiedFeatures.includes('workout-tracker')
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          : 'bg-blue-600 hover:bg-blue-500 text-white shadow-xs'
+                      }`}
+                    >
+                      {notifiedFeatures.includes('workout-tracker') ? '✓ VIP Access' : 'Request Access'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2. Workout Library */}
+                <div className="bg-slate-900/80 hover:bg-slate-800/90 border border-slate-800 hover:border-indigo-500/50 p-4 rounded-2xl transition-all shadow-md group flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/40 text-indigo-400 flex items-center justify-center">
+                        <BookOpen className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                      </div>
+                      <span className="text-[10px] font-black bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 px-2 py-0.5 rounded-full uppercase">
+                        v2.5 • Q1 2026
+                      </span>
+                    </div>
+                    <h3 className="font-extrabold text-white text-base group-hover:text-indigo-300 transition-colors">
+                      Workout Library
+                    </h3>
+                    <p className="text-xs text-slate-300 mt-1 line-clamp-2">
+                      500+ HD video exercise guides, 3D muscle heatmaps & custom coach routines assigned by your trainer.
+                    </p>
+                  </div>
+                  <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
+                    <span className="text-[10px] text-slate-400 font-medium">500+ 4K Form Videos</span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleNotification('workout-library')}
+                      className={`text-[11px] font-bold px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                        notifiedFeatures.includes('workout-library')
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs'
+                      }`}
+                    >
+                      {notifiedFeatures.includes('workout-library') ? '✓ VIP Access' : 'Request Access'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 3. Diet Tracker */}
+                <div className="bg-slate-900/80 hover:bg-slate-800/90 border border-slate-800 hover:border-emerald-500/50 p-4 rounded-2xl transition-all shadow-md group flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-600/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center">
+                        <Apple className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                      </div>
+                      <span className="text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 px-2 py-0.5 rounded-full uppercase">
+                        v2.6 • Q2 2026
+                      </span>
+                    </div>
+                    <h3 className="font-extrabold text-white text-base group-hover:text-emerald-300 transition-colors">
+                      Diet Tracker
+                    </h3>
+                    <p className="text-xs text-slate-300 mt-1 line-clamp-2">
+                      Daily calorie & macro counter (Protein, Carbs, Fats), GCC product barcode scanner & hydration logging.
+                    </p>
+                  </div>
+                  <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
+                    <span className="text-[10px] text-slate-400 font-medium">UAE Barcode Scanner</span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleNotification('diet-tracker')}
+                      className={`text-[11px] font-bold px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                        notifiedFeatures.includes('diet-tracker')
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
+                      }`}
+                    >
+                      {notifiedFeatures.includes('diet-tracker') ? '✓ VIP Access' : 'Request Access'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 4. Diet Library */}
+                <div className="bg-slate-900/80 hover:bg-slate-800/90 border border-slate-800 hover:border-amber-500/50 p-4 rounded-2xl transition-all shadow-md group flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="w-10 h-10 rounded-xl bg-amber-600/20 border border-amber-500/40 text-amber-400 flex items-center justify-center">
+                        <Utensils className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                      </div>
+                      <span className="text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-400/30 px-2 py-0.5 rounded-full uppercase">
+                        v2.6 • Q2 2026
+                      </span>
+                    </div>
+                    <h3 className="font-extrabold text-white text-base group-hover:text-amber-300 transition-colors">
+                      Diet Library
+                    </h3>
+                    <p className="text-xs text-slate-300 mt-1 line-clamp-2">
+                      Dubai-tailored healthy recipes, chef prep guides, macro breakdowns, grocery lists & UAE dining guide.
+                    </p>
+                  </div>
+                  <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
+                    <span className="text-[10px] text-slate-400 font-medium">Dubai Recipe Catalog</span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleNotification('diet-library')}
+                      className={`text-[11px] font-bold px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                        notifiedFeatures.includes('diet-library')
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          : 'bg-amber-600 hover:bg-amber-500 text-white shadow-xs'
+                      }`}
+                    >
+                      {notifiedFeatures.includes('diet-library') ? '✓ VIP Access' : 'Request Access'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 5. Habit Tracker */}
+                <div className="bg-slate-900/80 hover:bg-slate-800/90 border border-slate-800 hover:border-rose-500/50 p-4 rounded-2xl transition-all shadow-md group flex flex-col justify-between sm:col-span-2 lg:col-span-1">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="w-10 h-10 rounded-xl bg-rose-600/20 border border-rose-500/40 text-rose-400 flex items-center justify-center">
+                        <Flame className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                      </div>
+                      <span className="text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-400/30 px-2 py-0.5 rounded-full uppercase">
+                        v2.7 • Q2 2026
+                      </span>
+                    </div>
+                    <h3 className="font-extrabold text-white text-base group-hover:text-rose-300 transition-colors">
+                      Habit Tracker
+                    </h3>
+                    <p className="text-xs text-slate-300 mt-1 line-clamp-2">
+                      Daily habit streak counters, sleep duration, daily step goal tracking (10,000 steps) & hydration reminders.
+                    </p>
+                  </div>
+                  <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
+                    <span className="text-[10px] text-slate-400 font-medium">Daily Streaks & Steps</span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleNotification('habit-tracker')}
+                      className={`text-[11px] font-bold px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                        notifiedFeatures.includes('habit-tracker')
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          : 'bg-rose-600 hover:bg-rose-500 text-white shadow-xs'
+                      }`}
+                    >
+                      {notifiedFeatures.includes('habit-tracker') ? '✓ VIP Access' : 'Request Access'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* Unreviewed Completed Sessions Banner */}
           {unreviewedCompletedBookings.length > 0 && (
@@ -1085,13 +1487,61 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
               </div>
               <button
                 onClick={() => setIsBuyModalOpen(true)}
-                className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md"
+                className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md cursor-pointer"
               >
                 Browse Packages & Buy
               </button>
             </div>
           )}
+
+          {/* Progress Analytics Summary Banner in Overview */}
+          <div className="bg-gradient-to-r from-emerald-950 via-slate-900 to-teal-950 rounded-2xl border border-emerald-500/30 p-5 sm:p-6 text-white shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start space-x-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
+                <Activity className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                    VISUAL PROGRESS & METRICS
+                  </span>
+                  <span className="text-xs text-emerald-300 font-bold">Body Composition Analytics</span>
+                </div>
+                <h3 className="text-base font-black text-white mt-1">
+                  Historical Weight, Muscle Mass & Habit Consistency
+                </h3>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  View interactive Recharts curves of your weight evolution, body fat reductions, and daily hydration compliance.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsLogMetricModalOpen(true)}
+                className="px-3.5 py-2.5 bg-white/10 hover:bg-white/20 text-white font-bold text-xs rounded-xl border border-white/20 transition-all cursor-pointer"
+              >
+                + Quick Log
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('progress')}
+                className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl shadow-md transition-all hover:scale-103 cursor-pointer"
+              >
+                Open Analytics &rarr;
+              </button>
+            </div>
+          </div>
         </div>
+      )}
+
+      {/* VISUAL PROGRESS & BODY ANALYTICS TAB */}
+      {activeTab === 'progress' && (
+        <ProgressAnalyticsSection
+          client={client}
+          onOpenLogModal={() => setIsLogMetricModalOpen(true)}
+        />
       )}
 
       {/* SESSIONS TAB */}
@@ -1622,6 +2072,180 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
                 })
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* UPCOMING FEATURES ROADMAP TAB */}
+
+
+      {activeTab === 'upcoming' && (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          {/* Header Banner */}
+          <div className="bg-gradient-to-r from-purple-900 via-indigo-950 to-slate-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl border border-purple-500/30 relative overflow-hidden">
+            <div className="absolute -top-10 -right-10 w-72 h-72 bg-amber-500/10 rounded-full blur-3xl pointer-events-none"></div>
+            <div className="relative z-10 space-y-4">
+              <div className="flex items-center space-x-2">
+                <span className="bg-amber-400 text-slate-950 font-black text-[10px] uppercase px-3 py-0.5 rounded-full tracking-wider shadow-xs">
+                  ✨ ROADMAP 2026
+                </span>
+                <span className="text-xs text-purple-200 font-bold">5 Upcoming Client Modules</span>
+              </div>
+              <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+                Upcoming Client Features & Modules
+              </h2>
+              <p className="text-xs sm:text-sm text-purple-100 max-w-3xl leading-relaxed">
+                We are actively building 5 major client modules: <strong>Workout Tracker</strong>, <strong>Workout Library</strong>, <strong>Diet Tracker</strong>, <strong>Diet Library</strong>, and <strong>Habit Tracker</strong>. Explore details, view interactive previews, and register for VIP Beta Access below.
+              </p>
+
+              {betaSuccessMsg && (
+                <div className="p-3.5 bg-emerald-500/20 border border-emerald-400/40 rounded-2xl text-emerald-300 text-xs font-bold flex items-center space-x-2 animate-in fade-in">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                  <span>{betaSuccessMsg}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Category Filter Pills */}
+          <div className="flex items-center justify-between flex-wrap gap-3 bg-white p-3 rounded-2xl border border-slate-200 shadow-2xs">
+            <div className="flex items-center space-x-2 flex-wrap gap-y-2">
+              <span className="text-xs font-black uppercase text-slate-400 tracking-wider mr-1">Filter Modules:</span>
+              {(['All', 'Workout', 'Diet', 'Habit'] as const).map((cat) => {
+                const count = cat === 'All' ? UPCOMING_FEATURES.length : UPCOMING_FEATURES.filter(f => f.category === cat).length;
+                const isActive = featureFilter === cat;
+                return (
+                  <button
+                    key={cat}
+                    onClick={() => setFeatureFilter(cat)}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center space-x-1.5 transition-all cursor-pointer ${
+                      isActive
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    <span>{cat}</span>
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
+                      isActive ? 'bg-purple-800 text-amber-300' : 'bg-slate-200 text-slate-700'
+                    }`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="text-xs text-slate-500 font-medium flex items-center space-x-1">
+              <Rocket className="w-4 h-4 text-purple-600" />
+              <span>Full Release target: Q1-Q2 2026</span>
+            </div>
+          </div>
+
+          {/* Upcoming Features Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {UPCOMING_FEATURES.filter(f => featureFilter === 'All' || f.category === featureFilter).map((feat) => {
+              const IconComp = feat.icon;
+              const isNotified = notifiedFeatures.includes(feat.id);
+
+              return (
+                <div
+                  key={feat.id}
+                  className="bg-white rounded-3xl border border-slate-200 hover:border-purple-300 shadow-sm hover:shadow-xl transition-all p-6 space-y-5 flex flex-col justify-between relative overflow-hidden group"
+                >
+                  <div className="space-y-4">
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center space-x-3.5">
+                        <div className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${feat.color} text-white flex items-center justify-center shadow-md group-hover:scale-105 transition-transform`}>
+                          <IconComp className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <span className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full border ${feat.accentBg}`}>
+                            {feat.category} Module
+                          </span>
+                          <h3 className="text-xl font-black text-slate-900 mt-1">{feat.title}</h3>
+                        </div>
+                      </div>
+
+                      <div className="text-right">
+                        <span className={`text-xs font-black px-2.5 py-1 rounded-xl shadow-xs ${feat.badgeBg}`}>
+                          {feat.version}
+                        </span>
+                        <div className="text-[10px] text-slate-400 font-bold mt-1">ETA: {feat.eta}</div>
+                      </div>
+                    </div>
+
+                    {/* Description */}
+                    <p className="text-xs text-slate-600 leading-relaxed font-normal">
+                      {feat.description}
+                    </p>
+
+                    {/* Interactive Mock Data Snippet Box */}
+                    <div className="bg-slate-900 text-slate-100 p-4 rounded-2xl border border-slate-800 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                        <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider flex items-center gap-1">
+                          <Activity className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Interactive Preview Snippet</span>
+                        </span>
+                        <span className="text-[10px] text-slate-400 bg-slate-800 px-2 py-0.5 rounded font-mono">
+                          {feat.mockData.stat1.label}: {feat.mockData.stat1.value}
+                        </span>
+                      </div>
+                      <div className="text-xs font-medium text-slate-200 font-mono bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+                        {feat.mockData.previewSnippet}
+                      </div>
+                    </div>
+
+                    {/* Key Highlights */}
+                    <div className="space-y-1.5">
+                      <span className="text-[11px] font-extrabold text-slate-900 uppercase tracking-wider block">Key Capabilities:</span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                        {feat.keyHighlights.map((hl, idx) => (
+                          <div key={idx} className="flex items-start space-x-1.5 text-xs text-slate-700">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                            <span className="leading-tight">{hl}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedUpcomingFeatureModal(feat)}
+                      className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-extrabold text-xs rounded-xl transition-all flex items-center space-x-1.5 cursor-pointer"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                      <span>Interactive Demo</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleToggleNotification(feat.id)}
+                      className={`px-4 py-2.5 rounded-xl text-xs font-black flex items-center space-x-1.5 transition-all shadow-md cursor-pointer ${
+                        isNotified
+                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white'
+                      }`}
+                    >
+                      {isNotified ? (
+                        <>
+                          <Check className="w-4 h-4" />
+                          <span>VIP Beta Access Granted</span>
+                        </>
+                      ) : (
+                        <>
+                          <BellRing className="w-4 h-4 text-amber-300" />
+                          <span>Request VIP Access</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -2467,6 +3091,248 @@ Personal training session packages are personal and non-transferable. Package re
           </div>
         </div>
       )}
+      {/* Interactive Feature Preview Modal */}
+      {selectedUpcomingFeatureModal && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden border border-slate-200 flex flex-col animate-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className={`bg-gradient-to-r ${selectedUpcomingFeatureModal.color} text-white px-6 py-4 flex items-center justify-between shrink-0 select-none`}>
+              <div className="flex items-center space-x-3 min-w-0">
+                <div className="p-2.5 bg-white/20 backdrop-blur-md rounded-2xl shrink-0">
+                  {React.createElement(selectedUpcomingFeatureModal.icon, { className: 'w-6 h-6 text-white' })}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded bg-white/20 text-white tracking-wider">
+                      {selectedUpcomingFeatureModal.category} MODULE
+                    </span>
+                    <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded bg-amber-400 text-slate-950">
+                      {selectedUpcomingFeatureModal.version}
+                    </span>
+                  </div>
+                  <h3 className="font-black text-lg sm:text-xl text-white truncate mt-0.5">
+                    {selectedUpcomingFeatureModal.title} Preview
+                  </h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedUpcomingFeatureModal(null)}
+                className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white transition-all cursor-pointer flex items-center justify-center shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto space-y-6 flex-1 text-xs">
+              {/* Description & ETA */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h4 className="font-black text-slate-900 text-sm">{selectedUpcomingFeatureModal.title} Specification</h4>
+                  <p className="text-slate-600 mt-1 leading-relaxed">{selectedUpcomingFeatureModal.description}</p>
+                </div>
+                <div className="bg-white p-3 rounded-xl border border-slate-200 text-center shrink-0">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase block">Target Release</span>
+                  <span className="text-sm font-black text-purple-700">{selectedUpcomingFeatureModal.eta}</span>
+                </div>
+              </div>
+
+              {/* Stats Teaser */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-4 bg-purple-50/60 border border-purple-200/80 rounded-2xl text-center">
+                  <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wider block">
+                    {selectedUpcomingFeatureModal.mockData.stat1.label}
+                  </span>
+                  <span className="text-lg font-black text-slate-900 mt-0.5 block">
+                    {selectedUpcomingFeatureModal.mockData.stat1.value}
+                  </span>
+                </div>
+                <div className="p-4 bg-indigo-50/60 border border-indigo-200/80 rounded-2xl text-center">
+                  <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">
+                    {selectedUpcomingFeatureModal.mockData.stat2.label}
+                  </span>
+                  <span className="text-lg font-black text-slate-900 mt-0.5 block">
+                    {selectedUpcomingFeatureModal.mockData.stat2.value}
+                  </span>
+                </div>
+              </div>
+
+              {/* Specific Interactive Demo Component Mockup */}
+              <div className="bg-slate-950 text-white p-5 rounded-3xl border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <span className="text-xs font-black uppercase text-amber-400 flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-amber-400" />
+                    <span>Live Interactive Feature Mockup</span>
+                  </span>
+                  <span className="text-[10px] bg-slate-800 text-emerald-400 font-extrabold px-2 py-0.5 rounded-full">
+                    ● Simulator Active
+                  </span>
+                </div>
+
+                {selectedUpcomingFeatureModal.id === 'workout-tracker' && (
+                  <div className="space-y-3 font-sans">
+                    <div className="flex items-center justify-between bg-slate-900 p-3 rounded-xl border border-slate-800">
+                      <div>
+                        <div className="font-extrabold text-white text-sm">Barbell Incline Bench Press</div>
+                        <div className="text-[10px] text-slate-400">Target: Upper Chest • 4 Sets x 10 Reps</div>
+                      </div>
+                      <span className="bg-blue-600 text-white text-[10px] font-black px-2 py-1 rounded-lg">
+                        Rest Timer: 01:30
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-2 text-center text-[11px] font-mono">
+                      <div className="bg-slate-900 p-2 rounded-lg border border-slate-800">Set 1: 80kg x 10</div>
+                      <div className="bg-slate-900 p-2 rounded-lg border border-slate-800">Set 2: 85kg x 10</div>
+                      <div className="bg-slate-900 p-2 rounded-lg border border-slate-800 font-bold text-amber-400 border-amber-500/50">Set 3: 90kg x 8 (PR)</div>
+                      <div className="bg-slate-900 p-2 rounded-lg border border-slate-800 text-slate-500">+ Add Set</div>
+                    </div>
+                  </div>
+                )}
+
+                {selectedUpcomingFeatureModal.id === 'workout-library' && (
+                  <div className="space-y-3 font-sans">
+                    <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-900 border border-slate-800 flex items-center justify-center">
+                      <img
+                        src="https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=600&auto=format&fit=crop&q=80"
+                        alt="Exercise Demo"
+                        className="w-full h-full object-cover opacity-60"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent"></div>
+                      <div className="absolute w-14 h-14 rounded-full bg-purple-600/90 text-white flex items-center justify-center shadow-xl border border-purple-400/50">
+                        <Rocket className="w-7 h-7 fill-white" />
+                      </div>
+                      <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-xs font-bold text-white">
+                        <span>Form Cue: Keep shoulder blades retracted & feet planted</span>
+                        <span className="bg-purple-600 px-2 py-0.5 rounded text-[10px]">4K 60FPS</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {selectedUpcomingFeatureModal.id === 'diet-tracker' && (
+                  <div className="space-y-3 font-sans">
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 text-center">
+                        <span className="text-[10px] text-slate-400 block font-bold">Protein Target</span>
+                        <span className="text-base font-black text-emerald-400 mt-0.5 block">165g / 180g</span>
+                      </div>
+                      <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 text-center">
+                        <span className="text-[10px] text-slate-400 block font-bold">Carbohydrates</span>
+                        <span className="text-base font-black text-amber-400 mt-0.5 block">210g / 250g</span>
+                      </div>
+                      <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 text-center">
+                        <span className="text-[10px] text-slate-400 block font-bold">Fats</span>
+                        <span className="text-base font-black text-indigo-400 mt-0.5 block">55g / 65g</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {selectedUpcomingFeatureModal.id === 'diet-library' && (
+                  <div className="space-y-3 font-sans">
+                    <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 flex items-center space-x-3">
+                      <div className="w-12 h-12 rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-400 flex items-center justify-center font-black text-lg">
+                        🍲
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-extrabold text-white text-sm truncate">Dubai Spiced Grilled Salmon Bowl</div>
+                        <div className="text-[10px] text-slate-400">42g Protein • 520 kcal • 15 Mins Prep • High Fiber</div>
+                      </div>
+                      <span className="bg-amber-600 text-slate-950 text-[10px] font-black px-2.5 py-1 rounded-lg">
+                        View Recipe
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {selectedUpcomingFeatureModal.id === 'habit-tracker' && (
+                  <div className="space-y-3 font-sans">
+                    <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                      <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                        <span className="text-[10px] text-slate-400 block">Sleep</span>
+                        <span className="font-bold text-emerald-400">8.2 Hrs ✓</span>
+                      </div>
+                      <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                        <span className="text-[10px] text-slate-400 block">Steps</span>
+                        <span className="font-bold text-emerald-400">10,450 ✓</span>
+                      </div>
+                      <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                        <span className="text-[10px] text-slate-400 block">Water</span>
+                        <span className="font-bold text-emerald-400">3.5 L ✓</span>
+                      </div>
+                      <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                        <span className="text-[10px] text-slate-400 block">Streak</span>
+                        <span className="font-bold text-amber-400">14 Days 🔥</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Key Highlights List */}
+              <div className="space-y-2">
+                <h4 className="font-extrabold text-slate-900 text-xs uppercase tracking-wider">Features Included:</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {selectedUpcomingFeatureModal.keyHighlights.map((hl: string, idx: number) => (
+                    <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-start space-x-2 text-xs font-semibold text-slate-800">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <span>{hl}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="bg-slate-50 border-t border-slate-200 p-4 flex items-center justify-between gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => setSelectedUpcomingFeatureModal(null)}
+                className="px-4 py-2 border border-slate-300 rounded-xl text-slate-700 font-extrabold hover:bg-slate-100 transition-colors"
+              >
+                Close Preview
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  handleToggleNotification(selectedUpcomingFeatureModal.id);
+                  setSelectedUpcomingFeatureModal(null);
+                }}
+                className={`px-5 py-2.5 rounded-xl text-xs font-black flex items-center space-x-1.5 transition-all shadow-md cursor-pointer ${
+                  notifiedFeatures.includes(selectedUpcomingFeatureModal.id)
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white'
+                }`}
+              >
+                {notifiedFeatures.includes(selectedUpcomingFeatureModal.id) ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Registered for Beta</span>
+                  </>
+                ) : (
+                  <>
+                    <BellRing className="w-4 h-4 text-amber-300" />
+                    <span>Register for Early Beta Access</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Log Body Metric Check-In Modal */}
+      {isLogMetricModalOpen && (
+        <LogBodyMetricModal
+          clientId={client.id}
+          isOpen={isLogMetricModalOpen}
+          onClose={() => setIsLogMetricModalOpen(false)}
+        />
+      )}
     </div>
   );
 };
+
