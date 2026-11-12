@@ -44,6 +44,8 @@ export interface Client {
   assignedTrainerId: string;
   status: 'Active' | 'Inactive' | 'Archived';
   stripeCustomerId?: string;
+  activePackageId?: string;
+  sessionCreditsRemaining?: number;
   healthDeclaration?: HealthDeclaration;
   healthIssues?: HealthIssueNote[];
   bodyMetrics?: BodyMetricEntry[];
@@ -219,7 +221,7 @@ export interface SessionTransaction {
 }
 
 export type PaymentMethod = 'Cash' | 'Bank Transfer' | 'Card' | 'Online Payment' | 'Stripe';
-export type PaymentStatus = 'Paid' | 'Partially Paid' | 'Pending' | 'Failed' | 'Refunded';
+export type PaymentStatus = 'Paid' | 'Partially Paid' | 'Pending' | 'Failed' | 'Refunded' | 'Superseded';
 
 export interface PaymentRecord {
   id: string; // PAY-7701

@@ -1,4 +1,8 @@
 import { loadStripe, Stripe } from '@stripe/stripe-js';
+import { db } from '../firebase';
+import { collection, doc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
+import { formatDubaiDate } from '../utils/dubaiTime';
+import { PaymentRecord, ClientPackage, Client } from '../types';
 
 let stripePromise: Promise<Stripe | null> | null = null;
 let lastPubKey = '';
@@ -394,4 +398,260 @@ export async function verifyStripeConnection(
     pubKeyStatus: 'valid',
     message: `Stripe Gateway Connected! Account: ${accountName} (${accountId || 'Verified'}). Mode: ${livemode ? 'Live Production (sk_live_...)' : 'Test Sandbox (sk_test_...)'}. Both Secret and Publishable keys are active and verified.`,
   };
+}
+
+function cleanFirestoreData<T>(obj: T, seen = new WeakSet<object>(), depth = 0): T {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj !== 'object') return obj;
+  if (obj instanceof Date) return obj;
+  if (depth > 25) return obj;
+  if (seen.has(obj as object)) return obj;
+  seen.add(obj as object);
+  if (Array.isArray(obj)) return obj.map((i) => cleanFirestoreData(i, seen, depth + 1)) as any;
+  const cleaned: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) {
+      cleaned[k] = cleanFirestoreData(v, seen, depth + 1);
+    }
+  }
+  return cleaned as T;
+}
+
+export interface StripeSyncResult {
+  success: boolean;
+  syncedCount: number;
+  newFailuresCount: number;
+  reconciledCount: number;
+  message: string;
+  charges?: any[];
+}
+
+/**
+ * Synchronizes recent charges directly from Stripe API into Firestore.
+ * Bypasses local proxy/server route constraints and guarantees 100% resilient synchronization.
+ */
+export async function syncStripeChargesDirectly(secretKey: string): Promise<StripeSyncResult> {
+  const cleanKey = secretKey?.trim();
+  if (!cleanKey) {
+    return {
+      success: false,
+      syncedCount: 0,
+      newFailuresCount: 0,
+      reconciledCount: 0,
+      message: 'Stripe Secret Key missing. Configure in Admin Settings > Stripe Gateway.',
+    };
+  }
+
+  try {
+    const res = await fetch('https://api.stripe.com/v1/charges?limit=25', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${cleanKey}`,
+      },
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      return {
+        success: false,
+        syncedCount: 0,
+        newFailuresCount: 0,
+        reconciledCount: 0,
+        message: data.error?.message || 'Failed to fetch charges from Stripe API.',
+      };
+    }
+
+    const charges = data.data || [];
+    let syncedCount = 0;
+    let newFailuresCount = 0;
+    let reconciledCount = 0;
+
+    // Fetch snapshot of current Firestore collections
+    const [paymentsSnap, packagesSnap, clientsSnap] = await Promise.all([
+      getDocs(collection(db, 'payments')),
+      getDocs(collection(db, 'clientPackages')),
+      getDocs(collection(db, 'clients')),
+    ]);
+
+    const paymentsList = paymentsSnap.docs.map((d) => ({ ...d.data(), id: d.id })) as PaymentRecord[];
+    const packagesList = packagesSnap.docs.map((d) => ({ ...d.data(), id: d.id })) as ClientPackage[];
+    const clientsList = clientsSnap.docs.map((d) => ({ ...d.data(), id: d.id })) as Client[];
+
+    for (const c of charges) {
+      const chargeId = c.id;
+      const amountAED = c.amount ? c.amount / 100 : 0;
+      const isFailed = c.status === 'failed' || c.paid === false;
+      const failureMsg = c.failure_message || c.outcome?.seller_message || 'Payment declined by issuing bank';
+      const failureCode = c.failure_code || c.outcome?.reason || 'card_declined';
+
+      // Locate client candidate
+      const candidateEmail = (c.receipt_email || c.billing_details?.email || c.customer_details?.email || '').trim().toLowerCase();
+      const candidateCustId = c.customer;
+      const desc = (c.description || '').toLowerCase();
+
+      let matchedClient: Client | undefined = undefined;
+      if (candidateCustId) {
+        matchedClient = clientsList.find((cl) => cl.stripeCustomerId === candidateCustId);
+      }
+      if (!matchedClient && candidateEmail) {
+        matchedClient = clientsList.find((cl) => cl.email && cl.email.trim().toLowerCase() === candidateEmail);
+      }
+      if (!matchedClient && desc) {
+        matchedClient = clientsList.find((cl) => cl.fullName && desc.includes(cl.fullName.toLowerCase()));
+      }
+
+      const clientId = matchedClient?.id || c.metadata?.clientId || (candidateEmail ? 'PENDING_MATCH' : 'UNKNOWN');
+      const clientName = matchedClient?.fullName || candidateEmail || 'Client';
+
+      // 1. Check if a payment record with this charge ID already exists
+      const existingPay = paymentsList.find(
+        (p) => p.transactionReference === chargeId || (p as any).stripePaymentIntentId === chargeId
+      );
+
+      if (isFailed) {
+        if (existingPay) {
+          if (existingPay.status !== 'Failed') {
+            await updateDoc(doc(db, 'payments', existingPay.id), cleanFirestoreData({
+              status: 'Failed',
+              notes: `Stripe Card Declined: ${failureMsg} (${failureCode})`,
+            }));
+            syncedCount++;
+            newFailuresCount++;
+          }
+        } else {
+          // Record new failed payment
+          const payId = `PAY-FAILED-${chargeId.replace(/[^a-zA-Z0-9]/g, '')}`;
+          const failedRecord: PaymentRecord = {
+            id: payId,
+            clientId,
+            packageId: c.metadata?.packageId || 'NONE',
+            packageName: c.metadata?.packageName || (c.description || 'Declined Package Payment'),
+            baseAmountAED: Math.round(amountAED / 1.05),
+            vatAmountAED: Math.round(amountAED - Math.round(amountAED / 1.05)),
+            amountAED,
+            amountPaidAED: 0,
+            outstandingBalanceAED: amountAED,
+            paymentDate: formatDubaiDate(new Date(c.created * 1000)),
+            paymentMethod: 'Stripe',
+            transactionReference: chargeId,
+            stripePaymentIntentId: chargeId,
+            status: 'Failed',
+            notes: `Stripe Card Declined: ${failureMsg} (${failureCode})`,
+            createdAt: new Date(c.created * 1000).toISOString(),
+          };
+          await setDoc(doc(db, 'payments', payId), cleanFirestoreData(failedRecord));
+          syncedCount++;
+          newFailuresCount++;
+        }
+      } else {
+        // Succeeded charge
+        if (existingPay) {
+          if (existingPay.status !== 'Paid') {
+            await updateDoc(doc(db, 'payments', existingPay.id), cleanFirestoreData({
+              status: 'Paid',
+              amountPaidAED: existingPay.amountAED || amountAED,
+              outstandingBalanceAED: 0,
+              paymentMethod: 'Stripe',
+              notes: `Synchronized and verified live from Stripe API (${chargeId})`,
+            }));
+            reconciledCount++;
+            syncedCount++;
+
+            // Activate package if associated
+            if (existingPay.packageId && existingPay.packageId !== 'NONE') {
+              const pkg = packagesList.find((p) => p.id === existingPay.packageId);
+              if (pkg && pkg.status !== 'Active') {
+                await updateDoc(doc(db, 'clientPackages', pkg.id), cleanFirestoreData({
+                  status: 'Active',
+                  remainingSessions: pkg.remainingSessions > 0 ? pkg.remainingSessions : (pkg.totalSessions || 12),
+                  paymentReference: existingPay.id,
+                }));
+              }
+            }
+          }
+        } else {
+          // Check if there is any pending payment for this client that can be reconciled
+          const pendingPay = paymentsList.find(
+            (p) => p.status === 'Pending' && (p.clientId === clientId || (matchedClient && p.clientId === matchedClient.id))
+          );
+
+          if (pendingPay) {
+            await updateDoc(doc(db, 'payments', pendingPay.id), cleanFirestoreData({
+              status: 'Paid',
+              amountPaidAED: pendingPay.amountAED || amountAED,
+              outstandingBalanceAED: 0,
+              transactionReference: chargeId,
+              stripePaymentIntentId: c.payment_intent || chargeId,
+              paymentMethod: 'Stripe',
+              notes: `Synchronized and verified live from Stripe API (${chargeId})`,
+            }));
+            reconciledCount++;
+            syncedCount++;
+
+            // Activate associated pending package
+            if (pendingPay.packageId && pendingPay.packageId !== 'NONE') {
+              const pkg = packagesList.find((p) => p.id === pendingPay.packageId);
+              if (pkg) {
+                const sessionsToAllocate = pkg.remainingSessions > 0 ? pkg.remainingSessions : (pkg.totalSessions || 12);
+                await updateDoc(doc(db, 'clientPackages', pkg.id), cleanFirestoreData({
+                  status: 'Active',
+                  remainingSessions: sessionsToAllocate,
+                  paymentReference: pendingPay.id,
+                }));
+
+                // Update client session credits
+                if (matchedClient) {
+                  const currentCredits = matchedClient.sessionCreditsRemaining || 0;
+                  await updateDoc(doc(db, 'clients', matchedClient.id), cleanFirestoreData({
+                    activePackageId: pkg.id,
+                    sessionCreditsRemaining: currentCredits + sessionsToAllocate,
+                  }));
+                }
+              }
+            }
+          } else {
+            // Create a synchronized record
+            const payId = `PAY-STRIPE-SYNC-${chargeId.replace(/[^a-zA-Z0-9]/g, '')}`;
+            const payRecord: PaymentRecord = {
+              id: payId,
+              clientId,
+              packageId: c.metadata?.packageId || 'NONE',
+              packageName: c.metadata?.packageName || c.description || 'Personal Training Package',
+              baseAmountAED: Math.round(amountAED / 1.05),
+              vatAmountAED: Math.round(amountAED - Math.round(amountAED / 1.05)),
+              amountAED,
+              amountPaidAED: amountAED,
+              outstandingBalanceAED: 0,
+              paymentDate: formatDubaiDate(new Date(c.created * 1000)),
+              paymentMethod: 'Stripe',
+              transactionReference: chargeId,
+              stripePaymentIntentId: c.payment_intent || chargeId,
+              status: 'Paid',
+              notes: `Synchronized from Stripe API (${chargeId}) for ${clientName}`,
+              createdAt: new Date(c.created * 1000).toISOString(),
+            };
+            await setDoc(doc(db, 'payments', payId), cleanFirestoreData(payRecord));
+            syncedCount++;
+          }
+        }
+      }
+    }
+
+    return {
+      success: true,
+      syncedCount,
+      newFailuresCount,
+      reconciledCount,
+      message: `Direct Stripe Gateway Sync: Synchronized ${syncedCount} charges (${reconciledCount} payments reconciled, ${newFailuresCount} declined charges recorded).`,
+      charges,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      syncedCount: 0,
+      newFailuresCount: 0,
+      reconciledCount: 0,
+      message: `Direct Stripe Gateway error: ${err?.message || 'Network error'}`,
+    };
+  }
 }

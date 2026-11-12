@@ -46,7 +46,7 @@ app.post('/api/stripe/simulate-webhook', async (req: express.Request, res: expre
 });
 
 // Reconcile and synchronize real charges (both successful and failed) directly from Stripe API into Firestore
-app.post('/api/stripe/sync-charges', async (_req: express.Request, res: express.Response) => {
+app.all('/api/stripe/sync-charges', async (_req: express.Request, res: express.Response) => {
   try {
     const snap = await getDoc(doc(db, 'settings', 'global'));
     const secretKey = (snap.data()?.stripeLiveSecretKey || snap.data()?.stripeSecretKey || process.env.STRIPE_SECRET_KEY || '').trim();
@@ -93,6 +93,26 @@ app.get('/api/stripe/webhook-info', (_req: express.Request, res: express.Respons
     ],
     realtimeVerification: 'Active via Stripe Webhook Cloud Function + Firestore Credit Allocator',
   });
+});
+
+// Guarantee JSON response for any unmatched /api/* route (never return HTML)
+app.all('/api/*', (req: express.Request, res: express.Response) => {
+  res.status(404).json({
+    success: false,
+    error: `API route ${req.method} ${req.originalUrl} not found`,
+  });
+});
+
+// Catch-all JSON error handler for API routes
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (req.originalUrl?.startsWith('/api')) {
+    console.error('[API Error]:', err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Internal Server Error',
+    });
+  }
+  next(err);
 });
 
 // Mount Vite Dev Server in Development

@@ -724,38 +724,85 @@ export async function syncStripeChargesWithFirestore(secretKey: string): Promise
       query(collection(db, 'payments'), where('transactionReference', '==', chargeId))
     );
 
+    const safeCreatedMs = c.created ? (c.created > 1e11 ? c.created : c.created * 1000) : Date.now();
+    const recordDate = new Date(safeCreatedMs).toLocaleDateString('en-CA', { timeZone: 'Asia/Dubai' });
+    const isoTimestamp = new Date(safeCreatedMs).toISOString();
+
     if (existingSnap.empty) {
-      const payId = `PAY-STRIPE-SYNC-${chargeId.replace(/[^a-zA-Z0-9]/g, '')}`;
-      const recordDate = c.created
-        ? new Date(c.created * 1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Dubai' })
-        : getDubaiDate();
+      // Check if there is an existing pending payment for this client that can be reconciled
+      let reconciled = false;
+      if (!isFailed && clientId && clientId !== 'UNKNOWN' && clientId !== 'PENDING_MATCH') {
+        const pendingSnap = await getDocs(
+          query(collection(db, 'payments'), where('clientId', '==', clientId), where('status', '==', 'Pending'))
+        );
+        if (!pendingSnap.empty) {
+          const targetDoc = pendingSnap.docs[0];
+          const targetData = targetDoc.data();
+          await updateDoc(doc(db, 'payments', targetDoc.id), cleanData({
+            status: 'Paid',
+            amountPaidAED: targetData.amountAED || amountAED,
+            outstandingBalanceAED: 0,
+            transactionReference: chargeId,
+            stripePaymentIntentId: c.payment_intent || chargeId,
+            paymentMethod: 'Stripe',
+            notes: `Synchronized and verified live from Stripe API (${chargeId})`,
+          }));
 
-      const payRecord: PaymentRecord = {
-        id: payId,
-        clientId,
-        packageId: c.metadata?.packageId || 'NONE',
-        packageName: c.metadata?.packageName || (isFailed ? 'Declined Package Payment' : 'Personal Training Package'),
-        baseAmountAED: Math.round(amountAED / 1.05),
-        vatAmountAED: Math.round(amountAED - Math.round(amountAED / 1.05)),
-        amountAED,
-        amountPaidAED: isFailed ? 0 : amountAED,
-        outstandingBalanceAED: isFailed ? amountAED : 0,
-        paymentDate: recordDate,
-        paymentMethod: 'Stripe',
-        transactionReference: chargeId,
-        stripePaymentIntentId: chargeId,
-        status: isFailed ? 'Failed' : 'Paid',
-        notes: isFailed
-          ? `Stripe Card Declined: ${failureMsg} (${failureCode})`
-          : `Synchronized from Stripe API (${chargeId})`,
-        createdAt: new Date(c.created * 1000).toISOString(),
-      };
+          if (targetData.packageId && targetData.packageId !== 'NONE') {
+            const pkgDoc = await getDoc(doc(db, 'clientPackages', targetData.packageId));
+            if (pkgDoc.exists()) {
+              const pData = pkgDoc.data();
+              const sess = pData.remainingSessions > 0 ? pData.remainingSessions : (pData.totalSessions || 12);
+              await updateDoc(doc(db, 'clientPackages', targetData.packageId), cleanData({
+                status: 'Active',
+                remainingSessions: sess,
+                paymentReference: targetDoc.id,
+              }));
+              if (client) {
+                await updateDoc(doc(db, 'clients', client.id), cleanData({
+                  activePackageId: targetData.packageId,
+                  sessionCreditsRemaining: (client.sessionCreditsRemaining || 0) + sess,
+                }));
+              }
+            }
+          }
+          reconciled = true;
+          syncedCount++;
+        }
+      }
 
-      await setDoc(doc(db, 'payments', payId), cleanData(payRecord));
-      syncedCount++;
-      if (isFailed) newFailuresCount++;
+      if (!reconciled) {
+        const payId = isFailed
+          ? `PAY-FAILED-${chargeId.replace(/[^a-zA-Z0-9]/g, '')}`
+          : `PAY-STRIPE-SYNC-${chargeId.replace(/[^a-zA-Z0-9]/g, '')}`;
+
+        const payRecord: PaymentRecord = {
+          id: payId,
+          clientId,
+          packageId: c.metadata?.packageId || 'NONE',
+          packageName: c.metadata?.packageName || (isFailed ? 'Declined Package Payment' : (c.description || 'Personal Training Package')),
+          baseAmountAED: Math.round(amountAED / 1.05),
+          vatAmountAED: Math.round(amountAED - Math.round(amountAED / 1.05)),
+          amountAED,
+          amountPaidAED: isFailed ? 0 : amountAED,
+          outstandingBalanceAED: isFailed ? amountAED : 0,
+          paymentDate: recordDate,
+          paymentMethod: 'Stripe',
+          transactionReference: chargeId,
+          stripePaymentIntentId: chargeId,
+          status: isFailed ? 'Failed' : 'Paid',
+          notes: isFailed
+            ? `Stripe Card Declined: ${failureMsg} (${failureCode})`
+            : `Synchronized from Stripe API (${chargeId})`,
+          createdAt: isoTimestamp,
+        };
+
+        await setDoc(doc(db, 'payments', payId), cleanData(payRecord));
+        syncedCount++;
+        if (isFailed) newFailuresCount++;
+      }
     } else {
-      // If payment exists but status was Pending or missing failure reason, update it
+      // Payment exists - check if status needs reconciliation
       const docSnap = existingSnap.docs[0];
       const existingData = docSnap.data();
       if (isFailed && existingData.status !== 'Failed') {
@@ -765,6 +812,15 @@ export async function syncStripeChargesWithFirestore(secretKey: string): Promise
         }));
         syncedCount++;
         newFailuresCount++;
+      } else if (!isFailed && existingData.status !== 'Paid') {
+        await updateDoc(doc(db, 'payments', docSnap.id), cleanData({
+          status: 'Paid',
+          amountPaidAED: existingData.amountAED || amountAED,
+          outstandingBalanceAED: 0,
+          paymentMethod: 'Stripe',
+          notes: `Synchronized and verified live from Stripe API (${chargeId})`,
+        }));
+        syncedCount++;
       }
     }
   }

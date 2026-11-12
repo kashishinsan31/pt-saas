@@ -17,8 +17,10 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
+import { syncStripeChargesDirectly } from '../../services/stripeApi';
+
 export const PaymentsModule: React.FC = () => {
-  const { payments, clients, packageDefinitions, purchasePackage, refreshDataFromServer } = useApp();
+  const { payments, clients, packageDefinitions, purchasePackage, refreshDataFromServer, settings } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [methodFilter, setMethodFilter] = useState('ALL');
@@ -30,29 +32,59 @@ export const PaymentsModule: React.FC = () => {
     setIsSyncingStripe(true);
     setSyncFeedback(null);
     try {
-      const res = await fetch('/api/stripe/sync-charges', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        if (refreshDataFromServer) {
-          await refreshDataFromServer();
+      let syncSuccess = false;
+      let syncMessage = '';
+      let syncedCount = 0;
+
+      // 1. Try server-side synchronization route
+      try {
+        const res = await fetch('/api/stripe/sync-charges', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const data = await res.json();
+          if (data && data.success) {
+            syncSuccess = true;
+            syncMessage = data.message || `Successfully synced ${data.syncedCount || 0} charges from Stripe.`;
+            syncedCount = data.syncedCount || 0;
+          }
         }
-        setSyncFeedback({
-          success: true,
-          message: data.message || `Successfully synced ${data.syncedCount || 0} charges from Stripe.`,
-        });
-      } else {
-        setSyncFeedback({
-          success: false,
-          message: data.message || data.error || 'Failed to sync charges from Stripe API.',
-        });
+      } catch (serverErr) {
+        console.warn('Server sync endpoint returned error, falling back to direct Stripe API sync:', serverErr);
       }
+
+      // 2. Client-side direct fallback if server returned non-JSON, 404, or HTML
+      if (!syncSuccess) {
+        const activeKey = (settings?.stripeLiveSecretKey || settings?.stripeSecretKey || '').trim();
+        if (!activeKey) {
+          throw new Error('Stripe Secret Key missing. Please configure your key in Admin Settings > Stripe Gateway.');
+        }
+
+        const directResult = await syncStripeChargesDirectly(activeKey);
+        if (directResult.success) {
+          syncSuccess = true;
+          syncMessage = directResult.message;
+          syncedCount = directResult.syncedCount;
+        } else {
+          throw new Error(directResult.message || 'Direct sync with Stripe API failed.');
+        }
+      }
+
+      // 3. Immediately refresh fresh data from Firestore server
+      if (refreshDataFromServer) {
+        await refreshDataFromServer();
+      }
+
+      setSyncFeedback({
+        success: true,
+        message: syncMessage || `Synced ${syncedCount} charges from Stripe gateway.`,
+      });
     } catch (err: any) {
       setSyncFeedback({
         success: false,
-        message: err?.message || 'Error communicating with Stripe synchronization endpoint.',
+        message: err?.message || 'Error communicating with Stripe synchronization gateway.',
       });
     } finally {
       setIsSyncingStripe(false);
@@ -257,6 +289,7 @@ export const PaymentsModule: React.FC = () => {
             <option value="Paid">Paid</option>
             <option value="Pending">Pending</option>
             <option value="Failed">Failed</option>
+            <option value="Superseded">Superseded</option>
           </select>
         </div>
       </div>
@@ -314,6 +347,8 @@ export const PaymentsModule: React.FC = () => {
                               ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                               : pay.status === 'Failed'
                               ? 'bg-red-100 text-red-800 border border-red-300'
+                              : pay.status === 'Superseded'
+                              ? 'bg-slate-100 text-slate-600 border border-slate-300'
                               : 'bg-amber-100 text-amber-800 border border-amber-300'
                           }`}
                         >
