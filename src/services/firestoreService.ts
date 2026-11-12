@@ -56,22 +56,36 @@ export function handleFirestoreError(error: unknown, operationContext: string) {
 /**
  * Recursively strips any keys with value `undefined` from objects and arrays,
  * because Firestore setDoc/updateDoc throws on `undefined` values.
+ * Uses a WeakSet and depth limit to prevent infinite recursion on circular structures.
  */
-export function removeUndefinedFields<T>(obj: T): T {
+export function removeUndefinedFields<T>(obj: T, seen = new WeakSet<object>(), depth = 0): T {
   if (obj === null || obj === undefined) return obj;
+  if (typeof obj !== 'object') return obj;
+  if (obj instanceof Date) return obj;
+  if (depth > 25) return obj;
+
+  // Protect against circular references
+  if (seen.has(obj as object)) {
+    return obj;
+  }
+  seen.add(obj as object);
+
   if (Array.isArray(obj)) {
-    return obj.map((item) => removeUndefinedFields(item)) as any;
+    return obj.map((item) => removeUndefinedFields(item, seen, depth + 1)) as any;
   }
-  if (typeof obj === 'object' && !(obj instanceof Date)) {
-    const cleaned: Record<string, any> = {};
-    for (const [key, value] of Object.entries(obj)) {
-      if (value !== undefined) {
-        cleaned[key] = removeUndefinedFields(value);
-      }
+
+  // Skip React elements, DOM nodes, or window/document objects
+  if ((obj as any).$$typeof || (obj as any).nodeType !== undefined) {
+    return obj;
+  }
+
+  const cleaned: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      cleaned[key] = removeUndefinedFields(value, seen, depth + 1);
     }
-    return cleaned as T;
   }
-  return obj;
+  return cleaned as T;
 }
 
 // Subscribe to any collection with real-time updates

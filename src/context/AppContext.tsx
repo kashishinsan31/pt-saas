@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {
   User,
   Client,
@@ -469,6 +469,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setClientPackages((prevPackages) => {
       let updated = false;
+      const expiredTxns: SessionTransaction[] = [];
+
       const nextPackages = prevPackages.map((pkg) => {
         if (pkg.status === 'Active') {
           // Check if 30 days elapsed
@@ -476,9 +478,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             updated = true;
             const expiredAmount = pkg.remainingSessions;
 
-            // Log transaction if expired sessions > 0
+            // Collect transaction if expired sessions > 0
             if (expiredAmount > 0) {
-              const newTxn: SessionTransaction = {
+              expiredTxns.push({
                 id: `TXN-EXP-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
                 clientId: pkg.clientId,
                 packageId: pkg.id,
@@ -490,8 +492,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 reason: `Package 30-day validity reached (${pkg.expiryDate}). ${expiredAmount} unused session credits expired.`,
                 responsibleUserId: 'SYSTEM_EXPIRY_ENGINE',
                 responsibleRole: 'system',
-              };
-              setTransactions((txs) => [newTxn, ...txs]);
+              });
             }
 
             return {
@@ -548,8 +549,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return pkg;
       });
 
+      if (expiredTxns.length > 0) {
+        setTimeout(() => {
+          setTransactions((txs) => [...expiredTxns, ...txs]);
+        }, 0);
+      }
+
       if (updated) {
-        logAudit('PACKAGE_EXPIRY_JOB', 'Executed automatic package expiry scanning in Asia/Dubai timezone.');
+        setTimeout(() => {
+          logAudit('PACKAGE_EXPIRY_JOB', 'Executed automatic package expiry scanning in Asia/Dubai timezone.');
+        }, 0);
       }
       return finalPackages;
     });
@@ -866,129 +875,140 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Continuous Auto-Pay Recurring Billing Sweep Engine
+  const isSweepingRef = useRef(false);
+
   const runAutoPaySweepEngine = async (): Promise<{ processedCount: number; details: string[] }> => {
-    const todayStr = formatDubaiDate(new Date());
-    const details: string[] = [];
-    let count = 0;
+    if (isSweepingRef.current) {
+      return { processedCount: 0, details: ['Auto-pay sweep already in progress.'] };
+    }
+    isSweepingRef.current = true;
 
-    for (const sub of subscriptions) {
-      if (sub.status !== 'Active') continue;
+    try {
+      const todayStr = formatDubaiDate(new Date());
+      const details: string[] = [];
+      let count = 0;
 
-      const client = clients.find((c) => c.id === sub.clientId);
-      if (!client) continue;
+      for (const sub of subscriptions) {
+        if (sub.status !== 'Active') continue;
 
-      const defaultCard =
-        savedCards.find((c) => c.clientId === sub.clientId && c.isDefault) ||
-        savedCards.find((c) => c.clientId === sub.clientId);
+        const client = clients.find((c) => c.id === sub.clientId);
+        if (!client) continue;
 
-      if (!defaultCard) {
-        details.push(`${client.fullName}: Active subscription (${sub.id}), but no saved card found on file.`);
-        continue;
-      }
+        const defaultCard =
+          savedCards.find((c) => c.clientId === sub.clientId && c.isDefault) ||
+          savedCards.find((c) => c.clientId === sub.clientId);
 
-      // Check client active package
-      const clientActivePkg = clientPackages.find((p) => p.clientId === sub.clientId && p.status === 'Active');
+        if (!defaultCard) {
+          details.push(`${client.fullName}: Active subscription (${sub.id}), but no saved card found on file.`);
+          continue;
+        }
 
-      // Safeguard: Check if this subscription was already billed today
-      if (sub.lastPaymentDate === todayStr) {
-        details.push(`${client.fullName}: Subscription cycle already billed today (${todayStr}).`);
-        continue;
-      }
+        // Check client active package
+        const clientActivePkg = clientPackages.find((p) => p.clientId === sub.clientId && p.status === 'Active');
 
-      // Trigger conditions:
-      // 1. Active package validity has reached or passed today (clientActivePkg.expiryDate <= todayStr)
-      // 2. Active package session credits depleted (clientActivePkg.remainingSessions <= 0)
-      // 3. Subscription nextPaymentDate <= todayStr
-      // 4. No active package exists (previous package already expired)
-      const isPkgExpired = clientActivePkg ? clientActivePkg.expiryDate <= todayStr : true;
-      const isPkgDepleted = clientActivePkg ? clientActivePkg.remainingSessions <= 0 : true;
-      const isSubDue = sub.nextPaymentDate <= todayStr;
+        // Safeguard: Check if this subscription was already billed today
+        if (sub.lastPaymentDate === todayStr) {
+          details.push(`${client.fullName}: Subscription cycle already billed today (${todayStr}).`);
+          continue;
+        }
 
-      if (isPkgExpired || isPkgDepleted || isSubDue) {
-        const res = await triggerAutoDeductionRenewal(sub.clientId, sub.packageDefinitionId);
-        if (res.success) {
-          count++;
-          details.push(`✅ Auto-Pay Deducted: ${client.fullName} billed AED ${sub.amountAED} for ${sub.packageName}. Validity reached (${clientActivePkg?.expiryDate || todayStr}).`);
+        // Trigger conditions:
+        // 1. Active package validity has reached or passed today (clientActivePkg.expiryDate <= todayStr)
+        // 2. Active package session credits depleted (clientActivePkg.remainingSessions <= 0)
+        // 3. Subscription nextPaymentDate <= todayStr
+        // 4. No active package exists (previous package already expired)
+        const isPkgExpired = clientActivePkg ? clientActivePkg.expiryDate <= todayStr : true;
+        const isPkgDepleted = clientActivePkg ? clientActivePkg.remainingSessions <= 0 : true;
+        const isSubDue = sub.nextPaymentDate <= todayStr;
 
-          // Post high-priority notification to Admin
-          setNotifications((prev) => [
-            {
-              id: `NOTIF-AUTO-${sub.id}-${Date.now()}`,
-              userId: 'USR-ADMIN-1',
-              title: `💳 Auto-Pay Renewed: ${client.fullName}`,
-              message: `Auto-pay renewal successfully billed AED ${sub.amountAED} to card ${defaultCard.brand} (ending in ${defaultCard.last4}) as previous package validity expired on ${clientActivePkg?.expiryDate || todayStr}. New sessions active!`,
-              type: 'payment',
-              read: false,
-              timestamp: new Date().toISOString(),
-            },
-            ...prev,
-          ]);
+        if (isPkgExpired || isPkgDepleted || isSubDue) {
+          const res = await triggerAutoDeductionRenewal(sub.clientId, sub.packageDefinitionId);
+          if (res.success) {
+            count++;
+            details.push(`✅ Auto-Pay Deducted: ${client.fullName} billed AED ${sub.amountAED} for ${sub.packageName}. Validity reached (${clientActivePkg?.expiryDate || todayStr}).`);
 
-          // Post notification to Client
-          const clientUser = users.find(
-            (u) => u.associatedId === sub.clientId || (client && u.email.toLowerCase() === client.email.toLowerCase())
-          );
-          if (clientUser) {
+            // Post high-priority notification to Admin
             setNotifications((prev) => [
               {
-                id: `NOTIF-CLIENT-AUTO-${sub.id}-${Date.now()}`,
-                userId: clientUser.id,
-                title: `💳 Package Auto-Pay Renewed`,
-                message: `Your package "${sub.packageName}" was automatically renewed for AED ${sub.amountAED} via your saved card (${defaultCard.brand} ending in ${defaultCard.last4}). Fresh training sessions have been added to your wallet!`,
+                id: `NOTIF-AUTO-${sub.id}-${Date.now()}`,
+                userId: 'USR-ADMIN-1',
+                title: `💳 Auto-Pay Renewed: ${client.fullName}`,
+                message: `Auto-pay renewal successfully billed AED ${sub.amountAED} to card ${defaultCard.brand} (ending in ${defaultCard.last4}) as previous package validity expired on ${clientActivePkg?.expiryDate || todayStr}. New sessions active!`,
                 type: 'payment',
                 read: false,
                 timestamp: new Date().toISOString(),
               },
               ...prev,
             ]);
+
+            // Post notification to Client
+            const clientUser = users.find(
+              (u) => u.associatedId === sub.clientId || (client && u.email.toLowerCase() === client.email.toLowerCase())
+            );
+            if (clientUser) {
+              setNotifications((prev) => [
+                {
+                  id: `NOTIF-CLIENT-AUTO-${sub.id}-${Date.now()}`,
+                  userId: clientUser.id,
+                  title: `💳 Package Auto-Pay Renewed`,
+                  message: `Your package "${sub.packageName}" was automatically renewed for AED ${sub.amountAED} via your saved card (${defaultCard.brand} ending in ${defaultCard.last4}). Fresh training sessions have been added to your wallet!`,
+                  type: 'payment',
+                  read: false,
+                  timestamp: new Date().toISOString(),
+                },
+                ...prev,
+              ]);
+            }
+          } else {
+            details.push(`⚠️ Auto-Pay Attempt for ${client.fullName}: ${res.message}`);
+            const clientUser = users.find(
+              (u) => u.associatedId === sub.clientId || (client && u.email.toLowerCase() === client.email.toLowerCase())
+            );
+            if (clientUser) {
+              setNotifications((prev) => [
+                {
+                  id: `NOTIF-CLIENT-FAIL-${sub.id}-${Date.now()}`,
+                  userId: clientUser.id,
+                  title: `⚠️ Auto-Pay Deduction Failed`,
+                  message: `Automatic renewal for "${sub.packageName}" could not be processed: ${res.message}. Please verify your card details in the Client Portal.`,
+                  type: 'payment',
+                  read: false,
+                  timestamp: new Date().toISOString(),
+                },
+                ...prev,
+              ]);
+            }
           }
         } else {
-          details.push(`⚠️ Auto-Pay Attempt for ${client.fullName}: ${res.message}`);
-          const clientUser = users.find(
-            (u) => u.associatedId === sub.clientId || (client && u.email.toLowerCase() === client.email.toLowerCase())
-          );
-          if (clientUser) {
-            setNotifications((prev) => [
-              {
-                id: `NOTIF-CLIENT-FAIL-${sub.id}-${Date.now()}`,
-                userId: clientUser.id,
-                title: `⚠️ Auto-Pay Deduction Failed`,
-                message: `Automatic renewal for "${sub.packageName}" could not be processed: ${res.message}. Please verify your card details in the Client Portal.`,
-                type: 'payment',
-                read: false,
-                timestamp: new Date().toISOString(),
-              },
-              ...prev,
-            ]);
-          }
+          details.push(`⏸️ ${client.fullName}: Package active until ${clientActivePkg?.expiryDate} (${clientActivePkg?.remainingSessions} sessions left). Auto-pay held until expiry.`);
         }
-      } else {
-        details.push(`⏸️ ${client.fullName}: Package active until ${clientActivePkg?.expiryDate} (${clientActivePkg?.remainingSessions} sessions left). Auto-pay held until expiry.`);
       }
-    }
 
-    if (count > 0) {
-      logAudit('AUTO_PAY_SWEEP_EXECUTED', `Auto-Pay Engine processed ${count} subscription renewals.`);
-    }
+      if (count > 0) {
+        logAudit('AUTO_PAY_SWEEP_EXECUTED', `Auto-Pay Engine processed ${count} subscription renewals.`);
+      }
 
-    return { processedCount: count, details };
+      return { processedCount: count, details };
+    } finally {
+      isSweepingRef.current = false;
+    }
   };
 
-  // Auto-Pay Background Sweeper Scheduler (Sweeps on startup and every 30s)
+  // Auto-Pay Background Sweeper Scheduler (Periodic sweep without cascading feedback loops)
   useEffect(() => {
     const timer = setTimeout(() => {
       runAutoPaySweepEngine();
-    }, 1200);
+    }, 2000);
 
     const interval = setInterval(() => {
       runAutoPaySweepEngine();
-    }, 30000);
+    }, 45000);
 
     return () => {
       clearTimeout(timer);
       clearInterval(interval);
     };
-  }, [subscriptions, clientPackages, savedCards]);
+  }, []);
 
   const loginAsRole = (role: UserRole, specificId?: string) => {
     let match: User | undefined;

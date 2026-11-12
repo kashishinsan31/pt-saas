@@ -1357,12 +1357,15 @@ export const PackagesModule: React.FC = () => {
                   <input
                     type="number"
                     required
-                    min={100}
-                    step={10}
+                    min={2}
+                    step="any"
                     value={formData.priceAED}
                     onChange={(e) => setFormData({ ...formData, priceAED: Number(e.target.value) || 0 })}
                     className="w-full p-2 border border-slate-300 rounded-lg font-bold text-blue-900"
                   />
+                  <span className="text-[10px] text-slate-500 mt-0.5 block font-medium">
+                    Minimum: AED 2 (Stripe gateway threshold)
+                  </span>
                 </div>
               </div>
 

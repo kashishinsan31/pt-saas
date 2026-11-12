@@ -98,22 +98,30 @@ export function verifyStripeSignature(
 
 /**
  * Strips undefined properties recursively so Firestore setDoc/updateDoc doesn't throw.
+ * Includes cycle detection and depth limit to prevent stack overflow.
  */
-function cleanData<T>(obj: T): T {
+function cleanData<T>(obj: T, seen = new WeakSet<object>(), depth = 0): T {
   if (obj === null || obj === undefined) return obj;
+  if (typeof obj !== 'object') return obj;
+  if (obj instanceof Date) return obj;
+  if (depth > 25) return obj;
+
+  if (seen.has(obj as object)) {
+    return obj;
+  }
+  seen.add(obj as object);
+
   if (Array.isArray(obj)) {
-    return obj.map((i) => cleanData(i)) as any;
+    return obj.map((i) => cleanData(i, seen, depth + 1)) as any;
   }
-  if (typeof obj === 'object' && !(obj instanceof Date)) {
-    const cleaned: Record<string, any> = {};
-    for (const [k, v] of Object.entries(obj)) {
-      if (v !== undefined) {
-        cleaned[k] = cleanData(v);
-      }
+
+  const cleaned: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) {
+      cleaned[k] = cleanData(v, seen, depth + 1);
     }
-    return cleaned as T;
   }
-  return obj;
+  return cleaned as T;
 }
 
 /**

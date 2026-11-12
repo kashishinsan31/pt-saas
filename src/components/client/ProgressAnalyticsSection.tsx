@@ -193,6 +193,32 @@ export const ProgressAnalyticsSection: React.FC<ProgressAnalyticsSectionProps> =
     };
   }, [chartData]);
 
+  // Safe numerical Y-Axis domain bounds to avoid Recharts tick-calculation stack overflow
+  const yDomainWeight = useMemo<[number, number]>(() => {
+    if (chartData.length === 0) return [70, 95];
+    const vals = chartData
+      .map((d) => [d.weightKg, d.muscleMassKg])
+      .flat()
+      .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+    if (vals.length === 0) return [70, 95];
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    if (min === max) return [Math.max(0, Math.floor(min - 5)), Math.ceil(max + 5)];
+    return [Math.max(0, Math.floor(min - 3)), Math.ceil(max + 3)];
+  }, [chartData]);
+
+  const yDomainFat = useMemo<[number, number]>(() => {
+    if (chartData.length === 0) return [10, 30];
+    const vals = chartData
+      .map((d) => d.bodyFatPercentage)
+      .filter((v): v is number => typeof v === 'number' && !isNaN(v));
+    if (vals.length === 0) return [10, 30];
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    if (min === max) return [Math.max(0, Math.floor(min - 3)), Math.ceil(max + 3)];
+    return [Math.max(0, Math.floor(min - 2)), Math.ceil(max + 2)];
+  }, [chartData]);
+
   return (
     <div className="space-y-6">
       {/* Top Banner with Log Button */}
@@ -405,8 +431,8 @@ export const ProgressAnalyticsSection: React.FC<ProgressAnalyticsSectionProps> =
                 </div>
               </div>
 
-              <div className="w-full h-80">
-                <ResponsiveContainer width="100%" height="100%">
+              <div className="w-full h-80 min-h-[320px]">
+                <ResponsiveContainer width="100%" height={320} minWidth={0}>
                   <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <defs>
                       <linearGradient id="weightGrad" x1="0" y1="0" x2="0" y2="1">
@@ -426,7 +452,7 @@ export const ProgressAnalyticsSection: React.FC<ProgressAnalyticsSectionProps> =
                       tickLine={false}
                     />
                     <YAxis
-                      domain={['dataMin - 3', 'dataMax + 3']}
+                      domain={yDomainWeight}
                       stroke="#94a3b8"
                       tick={{ fontSize: 11, fontWeight: 600 }}
                       tickLine={false}
@@ -492,8 +518,8 @@ export const ProgressAnalyticsSection: React.FC<ProgressAnalyticsSectionProps> =
                 </div>
               </div>
 
-              <div className="w-full h-80">
-                <ResponsiveContainer width="100%" height="100%">
+              <div className="w-full h-80 min-h-[320px]">
+                <ResponsiveContainer width="100%" height={320} minWidth={0}>
                   <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
                     <XAxis
@@ -503,7 +529,7 @@ export const ProgressAnalyticsSection: React.FC<ProgressAnalyticsSectionProps> =
                       tickLine={false}
                     />
                     <YAxis
-                      domain={['dataMin - 1', 'dataMax + 1']}
+                      domain={yDomainFat}
                       stroke="#94a3b8"
                       tick={{ fontSize: 11, fontWeight: 600 }}
                       tickLine={false}
@@ -552,8 +578,8 @@ export const ProgressAnalyticsSection: React.FC<ProgressAnalyticsSectionProps> =
                 </div>
               </div>
 
-              <div className="w-full h-80">
-                <ResponsiveContainer width="100%" height="100%">
+              <div className="w-full h-80 min-h-[320px]">
+                <ResponsiveContainer width="100%" height={320} minWidth={0}>
                   <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
                     <XAxis
