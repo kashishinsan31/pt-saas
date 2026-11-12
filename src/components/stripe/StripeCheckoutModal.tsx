@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { PackageDefinition, Client } from '../../types';
+import { PackageDefinition, Client, PaymentRecord, NotificationItem } from '../../types';
 import { formatAED, calculateExpiryDate, formatDubaiDate } from '../../utils/dubaiTime';
 import { processStripeApiCharge, getStripe, createStripeCustomer } from '../../services/stripeApi';
+import { setDocument } from '../../services/firestoreService';
 import {
   CreditCard,
   ShieldCheck,
@@ -239,6 +240,45 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
       if (!stripeRes.success) {
         setIsProcessing(false);
         setErrorMsg(`Stripe Gateway Error: ${stripeRes.message}`);
+
+        // Record failed transaction in Firestore payments so it appears in Admin panel
+        try {
+          const failPayId = `PAY-FAIL-${Date.now()}`;
+          const failedRecord: PaymentRecord = {
+            id: failPayId,
+            clientId: client.id,
+            packageId: packageDef.id,
+            packageName: packageDef.name,
+            baseAmountAED: Math.round(totalPayableAED / 1.05),
+            vatAmountAED: vatAmountAED,
+            amountAED: totalPayableAED,
+            amountPaidAED: 0,
+            outstandingBalanceAED: totalPayableAED,
+            paymentDate: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Dubai' }),
+            paymentMethod: 'Stripe',
+            transactionReference: stripeRes.stripeChargeId || `ERR-${Date.now()}`,
+            stripePaymentIntentId: stripeRes.stripePaymentIntentId || stripeRes.stripeChargeId,
+            status: 'Failed',
+            notes: `Stripe Card Declined: ${stripeRes.message}`,
+            createdAt: new Date().toISOString(),
+          };
+          setDocument('payments', failPayId, failedRecord);
+
+          const notifId = `NOTIF-${Date.now()}-FAIL`;
+          const adminNotif: NotificationItem = {
+            id: notifId,
+            userId: 'admin-all',
+            title: `Payment Declined: ${client.fullName}`,
+            message: `Card charge of AED ${totalPayableAED} for ${client.fullName} was declined: ${stripeRes.message}.`,
+            type: 'payment',
+            read: false,
+            timestamp: new Date().toISOString(),
+          };
+          setDocument('notifications', notifId, adminNotif);
+        } catch (e) {
+          console.warn('Could not record failed payment to Firestore:', e);
+        }
+
         return;
       }
 
@@ -360,6 +400,45 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
       if (!stripeRes.success) {
         setIsProcessing(false);
         setErrorMsg(`Stripe Gateway Error: ${stripeRes.message}`);
+
+        // Record failed transaction in Firestore payments so it appears in Admin panel
+        try {
+          const failPayId = `PAY-FAIL-${Date.now()}`;
+          const failedRecord: PaymentRecord = {
+            id: failPayId,
+            clientId: client.id,
+            packageId: packageDef.id,
+            packageName: packageDef.name,
+            baseAmountAED: Math.round(totalPayableAED / 1.05),
+            vatAmountAED: vatAmountAED,
+            amountAED: totalPayableAED,
+            amountPaidAED: 0,
+            outstandingBalanceAED: totalPayableAED,
+            paymentDate: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Dubai' }),
+            paymentMethod: 'Stripe',
+            transactionReference: stripeRes.stripeChargeId || `ERR-${Date.now()}`,
+            stripePaymentIntentId: stripeRes.stripePaymentIntentId || stripeRes.stripeChargeId,
+            status: 'Failed',
+            notes: `Stripe Card Declined: ${stripeRes.message}`,
+            createdAt: new Date().toISOString(),
+          };
+          setDocument('payments', failPayId, failedRecord);
+
+          const notifId = `NOTIF-${Date.now()}-FAIL`;
+          const adminNotif: NotificationItem = {
+            id: notifId,
+            userId: 'admin-all',
+            title: `Payment Declined: ${client.fullName}`,
+            message: `Card charge of AED ${totalPayableAED} for ${client.fullName} was declined: ${stripeRes.message}.`,
+            type: 'payment',
+            read: false,
+            timestamp: new Date().toISOString(),
+          };
+          setDocument('notifications', notifId, adminNotif);
+        } catch (e) {
+          console.warn('Could not record failed payment to Firestore:', e);
+        }
+
         return;
       }
 

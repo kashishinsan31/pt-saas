@@ -554,6 +554,217 @@ export async function processStripePaymentSuccess(
 }
 
 /**
+ * Handles failed Stripe charges and payment intents, recording them into Firestore `payments`
+ * so the failure is visible in the Admin and Client portals with exact bank decline details.
+ */
+export async function processStripePaymentFailure(event: any): Promise<StripeWebhookResult> {
+  const eventType = event.type;
+  const dataObj = event.data?.object || {};
+  const metadata = dataObj.metadata || {};
+
+  const transactionId = dataObj.id || dataObj.charge || `ERR-${Date.now()}`;
+  const amountInFils = typeof dataObj.amount === 'number'
+    ? dataObj.amount
+    : typeof dataObj.amount_total === 'number'
+    ? dataObj.amount_total
+    : 0;
+  const amountAED = amountInFils > 0 ? amountInFils / 100 : parseFloat(metadata.totalAmountAED || '0') || 0;
+
+  const failureMessage =
+    dataObj.failure_message ||
+    dataObj.last_payment_error?.message ||
+    dataObj.outcome?.seller_message ||
+    'Card declined by issuing bank';
+  const failureCode =
+    dataObj.failure_code ||
+    dataObj.last_payment_error?.code ||
+    dataObj.outcome?.reason ||
+    'card_declined';
+
+  // Identify client
+  const client = await locateClient(dataObj, metadata);
+  const clientId = client?.id || metadata.clientId || 'UNKNOWN_CLIENT';
+  const clientName = client?.fullName || 'Client';
+
+  const notes = `Stripe Card Declined: ${failureMessage} (${failureCode})`;
+
+  try {
+    // 1. Check if a payment with this transactionReference already exists
+    const existingSnap = await getDocs(
+      query(collection(db, 'payments'), where('transactionReference', '==', transactionId))
+    );
+
+    let paymentId = '';
+    if (!existingSnap.empty) {
+      paymentId = existingSnap.docs[0].id;
+      await updateDoc(doc(db, 'payments', paymentId), cleanData({
+        status: 'Failed',
+        notes,
+        failedAt: new Date().toISOString(),
+      }));
+    } else {
+      paymentId = `PAY-FAILED-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const failedPayment: PaymentRecord = {
+        id: paymentId,
+        clientId,
+        packageId: metadata.packageId || 'NONE',
+        packageName: metadata.packageName || 'Personal Training Package',
+        baseAmountAED: Math.round(amountAED / 1.05),
+        vatAmountAED: Math.round(amountAED - Math.round(amountAED / 1.05)),
+        amountAED,
+        amountPaidAED: 0,
+        outstandingBalanceAED: amountAED,
+        paymentDate: getDubaiDate(),
+        paymentMethod: 'Stripe',
+        transactionReference: transactionId,
+        stripePaymentIntentId: transactionId,
+        status: 'Failed',
+        notes,
+        createdAt: new Date().toISOString(),
+      };
+      await setDoc(doc(db, 'payments', paymentId), cleanData(failedPayment));
+    }
+
+    // 2. Record notification for admin
+    const notifId = `NOTIF-${Date.now()}-FAIL`;
+    const adminNotif: NotificationItem = {
+      id: notifId,
+      userId: 'admin-all',
+      title: `Payment Declined: ${clientName}`,
+      message: `Payment of AED ${amountAED} by ${clientName} (${clientId}) failed: ${failureMessage}. (Stripe: ${transactionId}).`,
+      type: 'payment',
+      read: false,
+      timestamp: new Date().toISOString(),
+    };
+    await setDoc(doc(db, 'notifications', notifId), cleanData(adminNotif));
+
+    // 3. Audit log
+    const auditId = `AUDIT-${Date.now()}-FAIL`;
+    const auditItem: AuditLogItem = {
+      id: auditId,
+      timestamp: new Date().toISOString(),
+      userId: 'system-stripe-webhook',
+      userName: 'Stripe Webhook',
+      userRole: 'system',
+      action: 'STRIPE_PAYMENT_FAILED',
+      details: `Stripe charge ${transactionId} failed for ${clientName}: ${failureMessage} (Code: ${failureCode}). Amount: AED ${amountAED}.`,
+    };
+    await setDoc(doc(db, 'auditLogs', auditId), cleanData(auditItem));
+
+    return {
+      received: true,
+      status: 'success',
+      eventType,
+      transactionId,
+      clientId,
+      message: `Recorded payment failure in panel for ${clientName}: ${failureMessage}`,
+    };
+  } catch (err: any) {
+    console.error('[Stripe Webhook Failure Record Error]:', err);
+    return {
+      received: true,
+      status: 'error',
+      eventType,
+      transactionId,
+      message: err.message || 'Error recording failed payment',
+    };
+  }
+}
+
+/**
+ * Directly synchronizes recent charges from Stripe API into Firestore payments collection.
+ * Reconciles both successful and failed charges so admin and client panels are always 100% in sync.
+ */
+export async function syncStripeChargesWithFirestore(secretKey: string): Promise<{
+  syncedCount: number;
+  newFailuresCount: number;
+  charges: any[];
+}> {
+  const cleanKey = secretKey?.trim();
+  if (!cleanKey) {
+    throw new Error('Stripe Secret Key is required to synchronize charges.');
+  }
+
+  const res = await fetch('https://api.stripe.com/v1/charges?limit=25', {
+    headers: { 'Authorization': `Bearer ${cleanKey}` },
+  });
+
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    throw new Error(data.error?.message || 'Failed to query Stripe API charges.');
+  }
+
+  const charges = data.data || [];
+  let syncedCount = 0;
+  let newFailuresCount = 0;
+
+  for (const c of charges) {
+    const chargeId = c.id;
+    const amountAED = c.amount ? c.amount / 100 : 0;
+    const isFailed = c.status === 'failed' || c.paid === false;
+    const failureMsg = c.failure_message || c.outcome?.seller_message || 'Payment declined by issuing bank';
+    const failureCode = c.failure_code || c.outcome?.reason || 'card_declined';
+
+    // Locate client by email or customer
+    const candidateEmail = c.receipt_email || c.billing_details?.email;
+    const client = await locateClient(c, c.metadata || {});
+    const clientId = client?.id || c.metadata?.clientId || (candidateEmail ? 'PENDING_MATCH' : 'UNKNOWN');
+    const clientName = client?.fullName || candidateEmail || 'Client';
+
+    // Check if this charge already exists in Firestore payments
+    const existingSnap = await getDocs(
+      query(collection(db, 'payments'), where('transactionReference', '==', chargeId))
+    );
+
+    if (existingSnap.empty) {
+      const payId = `PAY-STRIPE-SYNC-${chargeId.replace(/[^a-zA-Z0-9]/g, '')}`;
+      const recordDate = c.created
+        ? new Date(c.created * 1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Dubai' })
+        : getDubaiDate();
+
+      const payRecord: PaymentRecord = {
+        id: payId,
+        clientId,
+        packageId: c.metadata?.packageId || 'NONE',
+        packageName: c.metadata?.packageName || (isFailed ? 'Declined Package Payment' : 'Personal Training Package'),
+        baseAmountAED: Math.round(amountAED / 1.05),
+        vatAmountAED: Math.round(amountAED - Math.round(amountAED / 1.05)),
+        amountAED,
+        amountPaidAED: isFailed ? 0 : amountAED,
+        outstandingBalanceAED: isFailed ? amountAED : 0,
+        paymentDate: recordDate,
+        paymentMethod: 'Stripe',
+        transactionReference: chargeId,
+        stripePaymentIntentId: chargeId,
+        status: isFailed ? 'Failed' : 'Paid',
+        notes: isFailed
+          ? `Stripe Card Declined: ${failureMsg} (${failureCode})`
+          : `Synchronized from Stripe API (${chargeId})`,
+        createdAt: new Date(c.created * 1000).toISOString(),
+      };
+
+      await setDoc(doc(db, 'payments', payId), cleanData(payRecord));
+      syncedCount++;
+      if (isFailed) newFailuresCount++;
+    } else {
+      // If payment exists but status was Pending or missing failure reason, update it
+      const docSnap = existingSnap.docs[0];
+      const existingData = docSnap.data();
+      if (isFailed && existingData.status !== 'Failed') {
+        await updateDoc(doc(db, 'payments', docSnap.id), cleanData({
+          status: 'Failed',
+          notes: `Stripe Card Declined: ${failureMsg} (${failureCode})`,
+        }));
+        syncedCount++;
+        newFailuresCount++;
+      }
+    }
+  }
+
+  return { syncedCount, newFailuresCount, charges };
+}
+
+/**
  * Universal Stripe Webhook Handler Helper.
  * Can be called by:
  * - Express request handlers (`app.post('/api/stripe/webhook', ...)`)
@@ -609,13 +820,7 @@ export async function handleStripeWebhookPayload(
 
     case 'charge.failed':
     case 'payment_intent.payment_failed':
-      return {
-        received: true,
-        status: 'ignored',
-        eventType,
-        transactionId: event.data?.object?.id,
-        message: `Recorded payment failure: ${event.data?.object?.failure_message || 'Payment failed'}.`,
-      };
+      return await processStripePaymentFailure(event);
 
     default:
       return {

@@ -5,7 +5,10 @@ import { fileURLToPath } from 'url';
 import {
   stripeWebhookCloudFunction,
   handleStripeWebhookPayload,
+  syncStripeChargesWithFirestore,
 } from './src/server/stripeWebhookHelper.js';
+import { db } from './src/firebase.js';
+import { doc, getDoc } from 'firebase/firestore';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,12 +45,41 @@ app.post('/api/stripe/simulate-webhook', async (req: express.Request, res: expre
   }
 });
 
+// Reconcile and synchronize real charges (both successful and failed) directly from Stripe API into Firestore
+app.post('/api/stripe/sync-charges', async (_req: express.Request, res: express.Response) => {
+  try {
+    const snap = await getDoc(doc(db, 'settings', 'global'));
+    const secretKey = (snap.data()?.stripeLiveSecretKey || snap.data()?.stripeSecretKey || process.env.STRIPE_SECRET_KEY || '').trim();
+
+    if (!secretKey) {
+      return res.status(400).json({
+        success: false,
+        message: 'No Stripe Secret Key configured. Please configure your key in System Settings > Stripe Gateway.',
+      });
+    }
+
+    const result = await syncStripeChargesWithFirestore(secretKey);
+    res.json({
+      success: true,
+      message: `Synchronized ${result.syncedCount} charges from Stripe (${result.newFailuresCount} declined/failed charges recorded).`,
+      ...result,
+    });
+  } catch (err: any) {
+    console.error('[Stripe Sync Error]:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Failed to synchronize with Stripe API.',
+    });
+  }
+});
+
 // Webhook Configuration & Health Status Info
 app.get('/api/stripe/webhook-info', (_req: express.Request, res: express.Response) => {
   res.json({
     configured: true,
     endpoint: '/api/stripe/webhook',
     simulationEndpoint: '/api/stripe/simulate-webhook',
+    syncChargesEndpoint: '/api/stripe/sync-charges',
     cloudFunctionHelper: 'src/server/stripeWebhookHelper.ts',
     cloudFunctionEntrypoint: 'stripeWebhookCloudFunction',
     automatedFirestoreCreditAllocation: true,

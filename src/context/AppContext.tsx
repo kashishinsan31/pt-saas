@@ -805,6 +805,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
 
         setPayments((prev) => [failedPayment, ...prev]);
+        setDocument('payments', failedPayment.id, failedPayment);
+
+        const notifId = `NOTIF-${Date.now()}-FAIL`;
+        const adminNotif: NotificationItem = {
+          id: notifId,
+          userId: 'admin-all',
+          title: `Auto-Pay Failed: ${client.fullName}`,
+          message: `Automatic renewal charge of AED ${totalAmt} for ${client.fullName} failed: ${stripeRes.message}.`,
+          type: 'payment',
+          read: false,
+          timestamp: new Date().toISOString(),
+        };
+        setNotifications((prev) => [adminNotif, ...prev]);
+        setDocument('notifications', notifId, adminNotif);
 
         // Update subscription status to 'Payment Failed'
         setSubscriptions((subs) =>
