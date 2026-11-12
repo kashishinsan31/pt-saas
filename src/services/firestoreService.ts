@@ -4,6 +4,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  getDoc,
   getDocs,
   getDocsFromServer,
   getDocFromServer,
@@ -33,16 +34,23 @@ import {
 export function handleFirestoreError(error: unknown, operationContext: string) {
   const err = error as { code?: string; message?: string; name?: string };
   const msg = typeof err?.message === 'string' ? err.message.toLowerCase() : '';
+  const code = typeof err?.code === 'string' ? err.code.toLowerCase() : '';
   if (
     err?.name === 'AbortError' ||
     err?.code === 'cancelled' ||
+    code === 'unavailable' ||
+    code === 'failed-precondition' ||
     msg.includes('aborted') ||
-    msg.includes('failed to fetch')
+    msg.includes('failed to fetch') ||
+    msg.includes('unavailable') ||
+    msg.includes('could not reach cloud firestore') ||
+    msg.includes('offline mode') ||
+    msg.includes('@firebase/firestore')
   ) {
-    // Ignore benign stream aborts and reconnect fetches when unmounting or switching tabs
+    // Ignore benign stream aborts, offline notices, and transient network reconnects
     return;
   }
-  console.error(`Firestore error during [${operationContext}]:`, err?.message || error);
+  console.warn(`Firestore notice during [${operationContext}]:`, err?.message || error);
 }
 
 /**
@@ -214,15 +222,15 @@ export async function fetchCollectionFromServer<T extends { id: string }>(
       id: docSnap.id,
     })) as T[];
   } catch (error) {
-    handleFirestoreError(error, `fetchCollectionFromServer:${collectionName}`);
-    // If direct server fetch hits transient offline error, fallback to getDocs
+    // If direct server fetch hits transient offline/unavailable, fallback seamlessly to local getDocs
     try {
       const snap = await getDocs(collection(db, collectionName));
       return snap.docs.map((docSnap) => ({
         ...docSnap.data(),
         id: docSnap.id,
       })) as T[];
-    } catch {
+    } catch (fallbackError) {
+      handleFirestoreError(fallbackError || error, `fetchCollectionFromServer:${collectionName}`);
       return [];
     }
   }
@@ -243,8 +251,17 @@ export async function fetchDocumentFromServer<T>(
     }
     return null;
   } catch (error) {
-    handleFirestoreError(error, `fetchDocumentFromServer:${collectionName}/${docId}`);
-    return null;
+    try {
+      const docRef = doc(db, collectionName, docId);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        return { ...snap.data(), id: snap.id } as unknown as T;
+      }
+      return null;
+    } catch (fallbackError) {
+      handleFirestoreError(fallbackError || error, `fetchDocumentFromServer:${collectionName}/${docId}`);
+      return null;
+    }
   }
 }
 

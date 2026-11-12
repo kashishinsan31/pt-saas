@@ -2,6 +2,10 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import {
+  stripeWebhookCloudFunction,
+  handleStripeWebhookPayload,
+} from './src/server/stripeWebhookHelper.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -9,100 +13,53 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
-// Stripe Webhook Endpoint (Requires raw body parsing for signature validation)
-app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req: express.Request, res: express.Response) => {
-  const sig = req.headers['stripe-signature'];
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-  let event: any;
-
-  try {
-    const rawBody = req.body;
-    let payloadStr = '';
-    if (typeof rawBody === 'string') {
-      payloadStr = rawBody;
-    } else if (Buffer.isBuffer(rawBody)) {
-      payloadStr = rawBody.toString('utf8');
-    } else {
-      payloadStr = JSON.stringify(rawBody);
-    }
-
-    event = JSON.parse(payloadStr);
-
-    const eventType = event.type;
-    const dataObj = event.data?.object || {};
-
-    console.log(`[Stripe Webhook Event Received]: ${eventType} (ID: ${event.id})`);
-
-    // Handle asynchronous payment status events
-    switch (eventType) {
-      case 'charge.succeeded':
-      case 'payment_intent.succeeded': {
-        const chargeId = dataObj.id;
-        const amountAED = dataObj.amount ? dataObj.amount / 100 : 0;
-        const receiptEmail = dataObj.receipt_email || dataObj.billing_details?.email;
-        console.log(`[Stripe Webhook SUCCESS]: Transaction ${chargeId} succeeded for AED ${amountAED} (${receiptEmail || 'Client'}). Status: Paid.`);
-        break;
-      }
-
-      case 'charge.failed':
-      case 'payment_intent.payment_failed': {
-        const chargeId = dataObj.id;
-        const failureReason = dataObj.failure_message || dataObj.last_payment_error?.message || 'Payment declined by issuing bank';
-        console.warn(`[Stripe Webhook FAILED]: Transaction ${chargeId} failed. Reason: ${failureReason}. Status: Failed.`);
-        break;
-      }
-
-      case 'charge.dispute.created': {
-        console.warn(`[Stripe Webhook DISPUTE]: Charge ${dataObj.charge} disputed.`);
-        break;
-      }
-
-      case 'customer.subscription.created':
-      case 'customer.subscription.updated': {
-        console.log(`[Stripe Webhook SUBSCRIPTION]: Subscription ${dataObj.id} updated. Status: ${dataObj.status}`);
-        break;
-      }
-
-      default:
-        console.log(`[Stripe Webhook]: Event ${eventType} acknowledged.`);
-    }
-
-    res.status(200).json({
-      received: true,
-      status: 'success',
-      eventType,
-      transactionId: dataObj.id || null,
-      message: `Webhook processed event ${eventType} successfully.`,
-    });
-  } catch (err: any) {
-    console.error(`[Stripe Webhook Processing Error]: ${err.message}`);
-    res.status(400).json({
-      received: false,
-      error: err.message,
-    });
+// Stripe Webhook Endpoint (Uses Cloud Function helper with raw body parsing for signature verification)
+app.post(
+  '/api/stripe/webhook',
+  express.raw({ type: 'application/json' }),
+  async (req: express.Request, res: express.Response) => {
+    return stripeWebhookCloudFunction(req, res);
   }
-});
+);
 
 // Regular JSON body parser for auxiliary API endpoints
 app.use(express.json());
+
+// Simulated Webhook Test Endpoint (for admin testing and automated verification without live Stripe signatures)
+app.post('/api/stripe/simulate-webhook', async (req: express.Request, res: express.Response) => {
+  try {
+    const payload = req.body;
+    console.log('[Stripe Webhook Simulation]: Processing test event...');
+    const result = await handleStripeWebhookPayload(payload);
+    res.status(result.status === 'error' && !result.received ? 400 : 200).json(result);
+  } catch (err: any) {
+    console.error('[Stripe Webhook Simulation Error]:', err);
+    res.status(500).json({
+      received: false,
+      status: 'error',
+      message: err?.message || 'Error processing webhook simulation',
+    });
+  }
+});
 
 // Webhook Configuration & Health Status Info
 app.get('/api/stripe/webhook-info', (_req: express.Request, res: express.Response) => {
   res.json({
     configured: true,
     endpoint: '/api/stripe/webhook',
+    simulationEndpoint: '/api/stripe/simulate-webhook',
+    cloudFunctionHelper: 'src/server/stripeWebhookHelper.ts',
+    cloudFunctionEntrypoint: 'stripeWebhookCloudFunction',
+    automatedFirestoreCreditAllocation: true,
     eventsSupported: [
       'charge.succeeded',
-      'charge.failed',
       'payment_intent.succeeded',
+      'checkout.session.completed',
+      'invoice.payment_succeeded',
+      'charge.failed',
       'payment_intent.payment_failed',
-      'charge.dispute.created',
-      'customer.subscription.created',
-      'customer.subscription.updated',
-      'customer.subscription.deleted',
     ],
-    realtimeVerification: 'Active via Stripe API + Express Webhook Listener',
+    realtimeVerification: 'Active via Stripe Webhook Cloud Function + Firestore Credit Allocator',
   });
 });
 

@@ -139,7 +139,12 @@
               str.indexOf('failed to fetch') !== -1 ||
               str.indexOf('cancelled') !== -1 ||
               str.indexOf('websocket') !== -1 ||
-              str.indexOf('closed without opened') !== -1
+              str.indexOf('closed without opened') !== -1 ||
+              str.indexOf('could not reach cloud firestore') !== -1 ||
+              str.indexOf('code=unavailable') !== -1 ||
+              str.indexOf('unavailable') !== -1 ||
+              str.indexOf('operate in offline mode') !== -1 ||
+              str.indexOf('@firebase/firestore') !== -1
             );
           } catch(e) {
             return false;

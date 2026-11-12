@@ -554,7 +554,19 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
 
       if (tokenResult.error) {
         setIsProcessingPay(false);
-        setPayFeedbackMsg(`Card Error: ${tokenResult.error.message}`);
+        const errMsg = tokenResult.error.message || '';
+        const isKeyExpired =
+          tokenResult.error.code === 'api_key_expired' ||
+          errMsg.toLowerCase().includes('expired api key') ||
+          errMsg.toLowerCase().includes('expired');
+
+        if (isKeyExpired) {
+          setPayFeedbackMsg(
+            'Stripe Gateway Notice: The online payment key has expired in Stripe Dashboard. Please contact reception or choose Pay by Cash/Bank Transfer while credentials are being updated.'
+          );
+        } else {
+          setPayFeedbackMsg(`Card Error: ${errMsg}`);
+        }
         return;
       }
 
@@ -731,7 +743,19 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
 
       if (tokenResult.error) {
         setIsAddingCard(false);
-        setAddCardError(`Card Error: ${tokenResult.error.message}`);
+        const errMsg = tokenResult.error.message || '';
+        const isKeyExpired =
+          tokenResult.error.code === 'api_key_expired' ||
+          errMsg.toLowerCase().includes('expired api key') ||
+          errMsg.toLowerCase().includes('expired');
+
+        if (isKeyExpired) {
+          setAddCardError(
+            'Stripe Gateway Notice: The online payment key has expired. Please contact administration to update Stripe credentials.'
+          );
+        } else {
+          setAddCardError(`Card Error: ${errMsg}`);
+        }
         return;
       }
 

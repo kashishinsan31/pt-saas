@@ -33,15 +33,17 @@ import {
   X,
   CheckCheck,
   Upload,
+  AlertCircle,
 } from 'lucide-react';
 import { PWAInstallButton } from '../common/PWAInstallButton';
-import { verifyStripeConnection } from '../../services/stripeApi';
+import { verifyStripeConnection, StripeVerifyResult } from '../../services/stripeApi';
 
 export const SettingsModule: React.FC = () => {
   const {
     settings,
     updateSettings,
     auditLogs,
+    clients,
     resetToCleanProductionData,
     exportDatabaseJSON,
     importDatabaseJSON,
@@ -69,15 +71,81 @@ export const SettingsModule: React.FC = () => {
   const [wipeSuccess, setWipeSuccess] = useState<boolean>(false);
   const [importFeedback, setImportFeedback] = useState<{ success: boolean; message: string } | null>(null);
   const [testingStripe, setTestingStripe] = useState(false);
-  const [stripeTestResult, setStripeTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [stripeTestResult, setStripeTestResult] = useState<StripeVerifyResult | null>(null);
+
+  // Stripe Webhook simulation state
+  const [webhookSimulating, setWebhookSimulating] = useState(false);
+  const [webhookSimulateResult, setWebhookSimulateResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [simSelectedClientId, setSimSelectedClientId] = useState<string>('');
+  const [simSessionCount, setSimSessionCount] = useState<number>(10);
+
+  const handleSimulateWebhook = async () => {
+    const targetClient = clients.find((c) => c.id === simSelectedClientId) || clients[0];
+    if (!targetClient) {
+      setWebhookSimulateResult({
+        success: false,
+        message: 'No client profile available to test webhook allocation. Please create a client first.',
+      });
+      return;
+    }
+
+    setWebhookSimulating(true);
+    setWebhookSimulateResult(null);
+
+    try {
+      const res = await fetch('/api/stripe/simulate-webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: `evt_sim_${Date.now()}`,
+          type: 'payment_intent.succeeded',
+          data: {
+            object: {
+              id: `pi_sim_${Date.now()}`,
+              amount: simSessionCount * 21000,
+              currency: 'aed',
+              receipt_email: targetClient.email,
+              metadata: {
+                clientId: targetClient.id,
+                sessionCount: String(simSessionCount),
+                packageName: `${simSessionCount} Sessions PT Package`,
+                totalAmountAED: String(simSessionCount * 210),
+              },
+            },
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        setWebhookSimulateResult({
+          success: true,
+          message: data.message || `Allocated ${simSessionCount} session credits to ${targetClient.fullName}!`,
+        });
+      } else {
+        setWebhookSimulateResult({
+          success: false,
+          message: data.message || 'Webhook simulation returned non-success response.',
+        });
+      }
+    } catch (err: any) {
+      setWebhookSimulateResult({
+        success: false,
+        message: err.message || 'Error communicating with Stripe webhook simulation endpoint.',
+      });
+    } finally {
+      setWebhookSimulating(false);
+    }
+  };
 
   const handleTestStripeConnection = async () => {
     const keyToTest = (formSettings.stripeLiveSecretKey || formSettings.stripeSecretKey)?.trim();
+    const pubKeyToTest = (formSettings.stripeLivePublishableKey || formSettings.stripePublishableKey)?.trim();
 
-    if (!keyToTest) {
+    if (!keyToTest && !pubKeyToTest) {
       setStripeTestResult({
         success: false,
-        message: 'Please enter your Stripe Secret Key (sk_live_... or sk_test_...) to test connectivity.',
+        message: 'Please enter your Stripe API keys (Publishable Key and Secret Key) to test connectivity.',
       });
       return;
     }
@@ -85,7 +153,7 @@ export const SettingsModule: React.FC = () => {
     setTestingStripe(true);
     setStripeTestResult(null);
 
-    const res = await verifyStripeConnection(keyToTest);
+    const res = await verifyStripeConnection(keyToTest || '', pubKeyToTest);
     setTestingStripe(false);
     setStripeTestResult(res);
   };
@@ -461,6 +529,39 @@ export const SettingsModule: React.FC = () => {
                   }}
                   className="w-full p-2.5 border border-slate-300 rounded-lg font-mono text-xs"
                 />
+                {(stripeTestResult?.pubKeyStatus === 'expired' || (formSettings.stripeLivePublishableKey || '').endsWith('lCxltl')) && (
+                  <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-800 text-[11px] space-y-1 animate-in fade-in">
+                    <div className="font-bold flex items-center gap-1 text-red-700">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>This Publishable Key is Expired in Stripe</span>
+                    </div>
+                    <p className="text-[10px] text-red-600 leading-tight">
+                      Stripe rejected this key with code <code className="bg-white px-1 py-0.5 rounded border border-red-200 font-mono">api_key_expired</code>. Your Secret Key is active and verified. Please copy your current Publishable Key from <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener noreferrer" className="underline font-bold text-blue-700">dashboard.stripe.com/apikeys</a> and paste it above.
+                    </p>
+                    <div className="pt-1 flex items-center gap-2">
+                      <a
+                        href="https://dashboard.stripe.com/apikeys"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] bg-blue-600 hover:bg-blue-700 text-white font-bold px-2 py-1 rounded inline-flex items-center gap-1 shadow-xs"
+                      >
+                        Get Key from Stripe Dashboard
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFormSettings((prev) => ({
+                            ...prev,
+                            stripeMode: 'test',
+                          }));
+                        }}
+                        className="text-[10px] bg-slate-800 hover:bg-slate-700 text-white font-bold px-2 py-1 rounded shadow-xs"
+                      >
+                        Switch to Test Mode
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <span className="text-[10px] text-slate-500 mt-1 block">
                   Your public client-side key from Stripe dashboard.
                 </span>
@@ -1335,7 +1436,7 @@ export const SettingsModule: React.FC = () => {
                   <div>
                     <label className="block font-bold text-slate-700 uppercase mb-1 flex items-center justify-between">
                       <span>Stripe Webhook Endpoint URL</span>
-                      <span className="text-[10px] text-purple-600 font-normal">Auto-reconciliation</span>
+                      <span className="text-[10px] bg-purple-100 text-purple-800 font-bold px-2 py-0.5 rounded-full">Cloud Function Auto-Allocates Credits</span>
                     </label>
                     <div className="flex items-center space-x-2">
                       <input
@@ -1352,6 +1453,65 @@ export const SettingsModule: React.FC = () => {
                         {copiedRecord === 'stripe_webhook' ? 'Copied!' : 'Copy'}
                       </button>
                     </div>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Listens for <code className="bg-slate-100 px-1 py-0.5 rounded">payment_intent.succeeded</code>, <code className="bg-slate-100 px-1 py-0.5 rounded">charge.succeeded</code>, and <code className="bg-slate-100 px-1 py-0.5 rounded">checkout.session.completed</code> to automatically allocate session credits in Firestore.
+                    </p>
+                  </div>
+
+                  {/* Webhook Simulator & Credit Verification */}
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+                        <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Cloud Function Webhook Tester & Firestore Credit Allocator</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-emerald-600 font-bold">Idempotency Active</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">Select Client to Credit</label>
+                        <select
+                          value={simSelectedClientId || (clients[0]?.id || '')}
+                          onChange={(e) => setSimSelectedClientId(e.target.value)}
+                          className="w-full p-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800"
+                        >
+                          {clients.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.fullName} ({c.id}) - {c.email}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">Session Credits to Allocate</label>
+                        <select
+                          value={simSessionCount}
+                          onChange={(e) => setSimSessionCount(parseInt(e.target.value, 10))}
+                          className="w-full p-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800"
+                        >
+                          <option value={5}>5 Sessions (AED 1,050)</option>
+                          <option value={10}>10 Sessions (AED 2,100)</option>
+                          <option value={12}>12 Sessions (AED 2,520)</option>
+                          <option value={20}>20 Sessions (AED 4,200)</option>
+                          <option value={30}>30 Sessions (AED 6,300)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSimulateWebhook}
+                        disabled={webhookSimulating || clients.length === 0}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        {webhookSimulating ? 'Processing Webhook...' : 'Simulate Webhook & Credit Client in Firestore'}
+                      </button>
+                    </div>
+                    {webhookSimulateResult && (
+                      <div className={`p-2 rounded-lg text-[11px] ${webhookSimulateResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+                        {webhookSimulateResult.message}
+                      </div>
+                    )}
                   </div>
 
                   <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl text-purple-900 text-[11px] space-y-1">

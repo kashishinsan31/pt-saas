@@ -1,7 +1,14 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { initializeFirestore, getFirestore } from 'firebase/firestore';
+import { initializeFirestore, getFirestore, setLogLevel } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
+
+// Silence verbose internal connection warnings from Firestore SDK
+try {
+  setLogLevel('silent');
+} catch {
+  // ignore
+}
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
@@ -19,8 +26,6 @@ try {
 } catch (e) {
   firestoreDb = dbId ? getFirestore(app, dbId) : getFirestore(app);
 }
-
-
 
 export const db = firestoreDb;
 export const auth = getAuth(app);
@@ -43,7 +48,12 @@ if (typeof window !== 'undefined') {
       lower.includes('aborted') ||
       lower.includes('signal is aborted') ||
       lower.includes('failed to fetch') ||
-      lower.includes('cancelled')
+      lower.includes('cancelled') ||
+      lower.includes('could not reach cloud firestore') ||
+      lower.includes('code=unavailable') ||
+      lower.includes('unavailable') ||
+      lower.includes('offline mode') ||
+      lower.includes('@firebase/firestore')
     );
   };
 

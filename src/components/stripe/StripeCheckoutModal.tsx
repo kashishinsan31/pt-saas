@@ -35,7 +35,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { purchasePackage, settings, addSavedCard, savedCards, promoCodes, validatePromoCode, incrementPromoCodeUsage } = useApp();
+  const { purchasePackage, settings, updateSettings, addSavedCard, savedCards, promoCodes, validatePromoCode, incrementPromoCodeUsage } = useApp();
 
   const clientSavedCards = savedCards.filter((c) => c.clientId === client.id);
   const [selectedSavedCardId, setSelectedSavedCardId] = useState<string>('NEW_CARD');
@@ -299,7 +299,19 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
 
       if (tokenResult.error) {
         setIsProcessing(false);
-        setErrorMsg(`Card Error: ${tokenResult.error.message}`);
+        const errMsg = tokenResult.error.message || '';
+        const isKeyExpired =
+          tokenResult.error.code === 'api_key_expired' ||
+          errMsg.toLowerCase().includes('expired api key') ||
+          errMsg.toLowerCase().includes('expired');
+
+        if (isKeyExpired) {
+          setErrorMsg(
+            `Stripe Live Publishable Key Expired: Your live Stripe Publishable Key has been expired or revoked in your Stripe Dashboard. The Secret Key is active for Waiter Walk LLC. Please update the Publishable Key in Admin Settings > Stripe Gateway, or switch to Test Mode.`
+          );
+        } else {
+          setErrorMsg(`Card Error: ${errMsg}`);
+        }
         return;
       }
 
@@ -527,9 +539,46 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
         <form onSubmit={handleCheckout} className="flex flex-col flex-1 min-h-0 overflow-hidden">
           <div className="flex-1 overflow-y-auto overscroll-contain p-3.5 sm:p-5 space-y-3.5 sm:space-y-4">
             {errorMsg && (
-              <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl p-3 flex items-start space-x-2 animate-in fade-in">
-                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                <div className="leading-relaxed font-semibold">{errorMsg}</div>
+              <div className="bg-red-50 border border-red-200 text-red-800 text-xs rounded-xl p-3.5 space-y-2.5 animate-in fade-in">
+                <div className="flex items-start space-x-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  <div className="leading-relaxed font-semibold">{errorMsg}</div>
+                </div>
+
+                {errorMsg.toLowerCase().includes('expired') && (
+                  <div className="pt-2 border-t border-red-200 text-[11px] space-y-2 text-slate-700">
+                    <div className="font-bold text-red-900 flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-red-600" />
+                      <span>How to resolve expired Stripe key:</span>
+                    </div>
+                    <ol className="list-decimal list-inside space-y-1 text-slate-600 pl-1">
+                      <li>Open your <strong>Stripe Dashboard</strong> (<a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline font-semibold">dashboard.stripe.com/apikeys</a>).</li>
+                      <li>Copy your active <strong>Publishable key</strong> (<code className="font-mono bg-white px-1 py-0.5 border border-slate-200 rounded text-slate-800 text-[10px]">pk_live_...</code>).</li>
+                      <li>In this app, go to <strong>Admin &gt; Settings &gt; Stripe Gateway</strong>, paste it into <strong>Stripe Publishable Key</strong>, and click Save.</li>
+                    </ol>
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateSettings({ stripeMode: 'test' });
+                          setErrorMsg('');
+                          setSuccessMsg('Switched to Test Sandbox Mode! You can now test checkout with standard test cards without real card charges.');
+                        }}
+                        className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-bold text-[11px] shadow-xs cursor-pointer transition-colors"
+                      >
+                        Switch to Test Sandbox Mode
+                      </button>
+                      <a
+                        href="https://dashboard.stripe.com/apikeys"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-[11px] inline-flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
+                      >
+                        Open Stripe Dashboard (API Keys)
+                      </a>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

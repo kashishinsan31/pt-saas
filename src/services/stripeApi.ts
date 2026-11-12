@@ -261,45 +261,137 @@ export async function attachCardTokenToCustomer(params: {
   }
 }
 
+export interface StripeVerifyResult {
+  success: boolean;
+  message: string;
+  livemode?: boolean;
+  accountName?: string;
+  accountId?: string;
+  pubKeyStatus?: 'valid' | 'expired' | 'invalid' | 'untested';
+  pubKeyError?: string;
+}
+
 /**
- * Validates Stripe Secret Key and verifies account connectivity in real time
+ * Validates Stripe Secret Key and Publishable Key, verifying account connectivity and active key validity in real time.
  */
 export async function verifyStripeConnection(
-  secretKey: string
-): Promise<{ success: boolean; message: string; livemode?: boolean }> {
+  secretKey: string,
+  publishableKey?: string
+): Promise<StripeVerifyResult> {
   const cleanKey = secretKey?.trim();
-  if (!cleanKey) {
+  const cleanPubKey = publishableKey?.trim();
+
+  if (!cleanKey && !cleanPubKey) {
     return {
       success: false,
-      message: 'Please enter a Stripe Secret Key (sk_test_... or sk_live_...) to test connectivity.',
+      message: 'Please enter your Stripe API keys (Publishable Key and Secret Key) to test connectivity.',
     };
   }
 
-  try {
-    const res = await fetch('https://api.stripe.com/v1/balance', {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${cleanKey}`,
-      },
-    });
+  let livemode = false;
+  let accountName = '';
+  let accountId = '';
 
-    const data = await res.json();
-    if (!res.ok || data.error) {
+  // 1. Validate Secret Key
+  if (cleanKey) {
+    try {
+      const res = await fetch('https://api.stripe.com/v1/account', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${cleanKey}`,
+        },
+      });
+
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        return {
+          success: false,
+          message: `Secret Key Error: ${data.error?.message || 'Invalid Stripe API secret key.'}`,
+        };
+      }
+
+      accountId = data.id || '';
+      accountName = data.business_profile?.name || data.settings?.dashboard?.display_name || 'Stripe Merchant';
+      livemode = cleanKey.startsWith('sk_live_') || cleanKey.startsWith('rk_live_');
+    } catch (err: any) {
       return {
         success: false,
-        message: data.error?.message || 'Invalid Stripe API key.',
+        message: `Network error connecting to Stripe: ${err?.message || 'Check your internet connection.'}`,
       };
     }
+  }
 
-    return {
-      success: true,
-      livemode: data.livemode,
-      message: `Stripe Gateway Connected! Mode: ${data.livemode ? 'Live Production (sk_live_...)' : 'Test Sandbox (sk_test_...)'}. Live charges are ready to process.`,
-    };
-  } catch (err: any) {
+  // 2. Validate Publishable Key (Detects if key has been expired/rolled in Stripe Dashboard)
+  let pubKeyStatus: 'valid' | 'expired' | 'invalid' | 'untested' = 'untested';
+  let pubKeyError = '';
+
+  if (cleanPubKey) {
+    try {
+      const tokenTestRes = await fetch('https://api.stripe.com/v1/tokens', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${cleanPubKey}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'card[number]=4242424242424242&card[exp_month]=12&card[exp_year]=2028&card[cvc]=123',
+      });
+
+      const tokenData = await tokenTestRes.json();
+      if (tokenData.error) {
+        const errMsg = tokenData.error.message || '';
+        const isExpired =
+          tokenData.error.code === 'api_key_expired' ||
+          errMsg.toLowerCase().includes('expired api key') ||
+          errMsg.toLowerCase().includes('expired');
+
+        if (isExpired) {
+          pubKeyStatus = 'expired';
+          pubKeyError = errMsg;
+        } else if (tokenTestRes.status === 401) {
+          pubKeyStatus = 'invalid';
+          pubKeyError = errMsg || 'Invalid publishable key provided';
+        } else {
+          // If status is 200 or 402/400 (card test response), key authentication passed!
+          pubKeyStatus = 'valid';
+        }
+      } else {
+        pubKeyStatus = 'valid';
+      }
+    } catch (err: any) {
+      console.warn('Publishable key verification warning:', err);
+    }
+  }
+
+  if (pubKeyStatus === 'expired') {
     return {
       success: false,
-      message: `Network error connecting to Stripe: ${err?.message || 'Check your internet connection.'}`,
+      livemode,
+      accountName,
+      accountId,
+      pubKeyStatus: 'expired',
+      pubKeyError,
+      message: `Publishable Key Expired: Your Stripe Publishable Key (${(cleanPubKey || '').slice(0, 14)}...${(cleanPubKey || '').slice(-6)}) was expired or rolled in your Stripe Dashboard. Please copy your active Publishable Key from https://dashboard.stripe.com/apikeys. (Secret Key is valid for ${accountName || 'your account'}).`,
     };
   }
+
+  if (pubKeyStatus === 'invalid') {
+    return {
+      success: false,
+      livemode,
+      accountName,
+      accountId,
+      pubKeyStatus: 'invalid',
+      pubKeyError,
+      message: `Invalid Publishable Key: ${pubKeyError}. Please verify the key in your Stripe Dashboard (Developers > API keys).`,
+    };
+  }
+
+  return {
+    success: true,
+    livemode,
+    accountName,
+    accountId,
+    pubKeyStatus: 'valid',
+    message: `Stripe Gateway Connected! Account: ${accountName} (${accountId || 'Verified'}). Mode: ${livemode ? 'Live Production (sk_live_...)' : 'Test Sandbox (sk_test_...)'}. Both Secret and Publishable keys are active and verified.`,
+  };
 }

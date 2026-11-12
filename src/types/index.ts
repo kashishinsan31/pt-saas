@@ -240,6 +240,7 @@ export interface PaymentRecord {
   status: PaymentStatus;
   receiptUrl?: string;
   stripePaymentIntentId?: string;
+  notes?: string;
   createdAt: string;
 }
 

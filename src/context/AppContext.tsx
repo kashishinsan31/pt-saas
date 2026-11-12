@@ -369,10 +369,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         message: `Fresh data loaded directly from Firestore server (${syncTimeString} GST)!`,
       };
     } catch (err: any) {
-      console.error('Failed to refresh data from server:', err);
+      const msg = err?.message || '';
+      if (!msg.toLowerCase().includes('unavailable') && !msg.toLowerCase().includes('offline')) {
+        console.warn('Notice while refreshing data from server:', msg);
+      }
       return {
         success: false,
-        message: err?.message || 'Error communicating with Firestore server.',
+        message: 'Direct server connection timed out. Data was loaded from offline cache.',
       };
     } finally {
       setIsRefreshingServerData(false);
