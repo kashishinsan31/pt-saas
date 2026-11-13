@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { formatReadableDate, formatDubaiDate } from '../../utils/dubaiTime';
+import { CompleteSessionModal } from '../common/CompleteSessionModal';
 import {
   Calendar as CalendarIcon,
   ChevronLeft,
@@ -40,16 +41,10 @@ export const CalendarModule: React.FC = () => {
   const [rescheduleStartTime, setRescheduleStartTime] = useState('');
   const [rescheduleEndTime, setRescheduleEndTime] = useState('');
   const [rescheduleMsg, setRescheduleMsg] = useState('');
-  const [completeError, setCompleteError] = useState<string | null>(null);
+  const [completeBookingTarget, setCompleteBookingTarget] = useState<any>(null);
 
-  const handleMarkCompleteCalendar = (sessionId: string) => {
-    setCompleteError(null);
-    const res = markSessionCompleted(sessionId);
-    if (res.success) {
-      setSelectedSession(null);
-    } else {
-      setCompleteError(res.message);
-    }
+  const handleOpenCompleteModalCalendar = (session: any) => {
+    setCompleteBookingTarget(session);
   };
 
   const role = currentUser?.role || 'admin';
@@ -559,19 +554,26 @@ export const CalendarModule: React.FC = () => {
                 </div>
               </div>
 
-              {selectedSession.workoutNotes && (
-                <div className="bg-blue-50 p-3 rounded-lg border border-blue-200 text-blue-900">
-                  <strong>Workout Notes:</strong> {selectedSession.workoutNotes}
+              {selectedSession.exercises && selectedSession.exercises.length > 0 && (
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1.5">
+                  <div className="font-bold text-slate-900">Logged Session Exercises:</div>
+                  <div className="space-y-1">
+                    {selectedSession.exercises.map((ex: any) => (
+                      <div key={ex.id} className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-slate-200/80">
+                        <span className="font-semibold text-slate-800">{ex.exerciseName}</span>
+                        <span className="font-mono tabular-nums text-slate-600">
+                          {ex.weightKg > 0 ? `${ex.weightKg}kg` : 'BW'} · {ex.reps} reps ·{' '}
+                          {ex.trackingMode === 'sets' ? `${ex.sets} sets` : `${ex.durationValue || ex.durationSeconds}${ex.durationUnit || 's'}`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
-              {completeError && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
-                  <div>
-                    <span className="font-bold block mb-0.5">Timing Restriction</span>
-                    {completeError}
-                  </div>
+              {selectedSession.workoutNotes && (
+                <div className="bg-blue-50 p-3 rounded-lg border border-blue-200 text-blue-900">
+                  <strong>Workout Notes:</strong> {selectedSession.workoutNotes}
                 </div>
               )}
 
@@ -590,7 +592,7 @@ export const CalendarModule: React.FC = () => {
                     Reschedule Session
                   </button>
                   <button
-                    onClick={() => handleMarkCompleteCalendar(selectedSession.id)}
+                    onClick={() => handleOpenCompleteModalCalendar(selectedSession)}
                     className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold"
                   >
                     Mark Complete
@@ -601,6 +603,21 @@ export const CalendarModule: React.FC = () => {
           </div>
         </div>
       )}
+
+      <CompleteSessionModal
+        isOpen={Boolean(completeBookingTarget)}
+        booking={completeBookingTarget}
+        clientName={completeBookingTarget ? clients.find((c) => c.id === completeBookingTarget.clientId)?.fullName : undefined}
+        onClose={() => setCompleteBookingTarget(null)}
+        onComplete={(bookingId, notes, exercises) => {
+          const res = markSessionCompleted(bookingId, notes, exercises);
+          if (res.success) {
+            setCompleteBookingTarget(null);
+            setSelectedSession(null);
+          }
+          return res;
+        }}
+      />
 
       {/* Reschedule Modal */}
       {isRescheduleOpen && selectedSession && (

@@ -50,6 +50,7 @@ import { HealthDeclarationModal } from '../common/HealthDeclarationModal';
 import { AddHealthIssueModal } from '../common/AddHealthIssueModal';
 import { ProgressAnalyticsSection } from './ProgressAnalyticsSection';
 import { LogBodyMetricModal } from './LogBodyMetricModal';
+import { ClientWorkoutAnalyticsCard } from './ClientWorkoutAnalyticsCard';
 
 interface ClientDashboardProps {
   initialSection?: 'dashboard' | 'sessions' | 'payments' | 'subscriptions' | 'health' | 'upcoming';
@@ -1631,6 +1632,9 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
             </div>
           )}
 
+          {/* Training Session & Exercise Analytics Visible Directly on Client Home Screen */}
+          <ClientWorkoutAnalyticsCard bookings={clientBookings} />
+
           {/* Progress Analytics Summary Banner in Overview */}
           <div className="bg-gradient-to-r from-emerald-950 via-slate-900 to-teal-950 rounded-2xl border border-emerald-500/30 p-5 sm:p-6 text-white shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex items-start space-x-3.5">
@@ -1765,6 +1769,22 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
                       )}
                     </div>
                   </div>
+                  {b.exercises && b.exercises.length > 0 && (
+                    <div className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1">
+                      <div className="text-[11px] font-bold text-slate-700">Exercises Completed:</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                        {b.exercises.map((ex) => (
+                          <div key={ex.id} className="flex items-center justify-between text-[11px] text-slate-700 bg-slate-50 px-2 py-1 rounded border border-slate-200/70">
+                            <span className="font-semibold truncate pr-2">{ex.exerciseName}</span>
+                            <span className="font-mono tabular-nums text-slate-600 shrink-0">
+                              {ex.weightKg > 0 ? `${ex.weightKg}kg` : 'BW'} · {ex.reps} reps ·{' '}
+                              {ex.trackingMode === 'sets' ? `${ex.sets} sets` : `${ex.durationValue || ex.durationSeconds}${ex.durationUnit || 's'}`}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {b.clientReview && (
                     <div className="text-[11px] bg-white p-2 rounded-lg border border-slate-200 text-slate-700 italic">
                       "{b.clientReview}" (Trainer: ⭐ {b.trainerRating}/5 • Session: ⭐ {b.sessionRating}/5)

@@ -168,6 +168,18 @@ export type BookingStatus =
   | 'Late Cancellation'
   | 'No Show';
 
+export interface SessionExerciseEntry {
+  id: string;
+  exerciseName: string;
+  weightKg: number;
+  reps: number;
+  trackingMode: 'sets' | 'time_period';
+  sets?: number;
+  durationValue?: number;
+  durationUnit?: 'sec' | 'min';
+  durationSeconds?: number;
+}
+
 export interface SessionBooking {
   id: string; // e.g. BOK-8801
   clientId: string;
@@ -186,6 +198,7 @@ export interface SessionBooking {
   creditImpact?: 'refunded' | 'deducted' | 'none';
   completedAt?: string;
   workoutNotes?: string;
+  exercises?: SessionExerciseEntry[];
   trainerRating?: number;
   sessionRating?: number;
   clientReview?: string;

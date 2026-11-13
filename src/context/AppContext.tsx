@@ -20,6 +20,7 @@ import {
   HealthDeclaration,
   PromoCode,
   BodyMetricEntry,
+  SessionExerciseEntry,
 } from '../types';
 import { processStripeApiCharge, syncStripeChargesDirectly } from '../services/stripeApi';
 import {
@@ -182,7 +183,7 @@ interface AppContextType {
     notes?: string
   ) => { success: boolean; message: string; bookingId?: string };
 
-  markSessionCompleted: (bookingId: string, workoutNotes?: string) => { success: boolean; message: string };
+  markSessionCompleted: (bookingId: string, workoutNotes?: string, exercises?: SessionExerciseEntry[]) => { success: boolean; message: string };
   submitSessionReview: (bookingId: string, trainerRating: number, sessionRating: number, clientReview?: string) => { success: boolean; message: string };
   cancelSessionByClient: (bookingId: string, reason?: string) => { success: boolean; message: string; creditImpact: string };
   cancelSessionByTrainer: (bookingId: string, reason?: string) => void;
@@ -2267,7 +2268,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  const markSessionCompleted = (bookingId: string, workoutNotes?: string): { success: boolean; message: string } => {
+  const markSessionCompleted = (
+    bookingId: string,
+    workoutNotes?: string,
+    exercises?: SessionExerciseEntry[]
+  ): { success: boolean; message: string } => {
     const booking = bookings.find((b) => b.id === bookingId);
     if (!booking) {
       return { success: false, message: 'Session booking not found.' };
@@ -2285,6 +2290,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         success: false,
         message: timingCheck.reason || 'Cannot mark session completed at this time due to timing restrictions.',
       };
+    }
+
+    // Enforce compulsory exercise logging on session completion
+    const rawExercises = (exercises || []).filter((ex) => ex && ex.exerciseName && ex.exerciseName.trim().length > 0);
+    if (rawExercises.length === 0) {
+      return {
+        success: false,
+        message: 'Compulsory Exercise Log: Please add at least one exercise performed (name, weight, reps, and sets or time period) before completing the session.',
+      };
+    }
+
+    const normalizedExercises: SessionExerciseEntry[] = [];
+    for (let i = 0; i < rawExercises.length; i++) {
+      const ex = rawExercises[i];
+      const name = ex.exerciseName.trim();
+      if (typeof ex.weightKg !== 'number' || isNaN(ex.weightKg) || ex.weightKg < 0) {
+        return {
+          success: false,
+          message: `Exercise #${i + 1} (${name}): Please enter a valid weight in kg (use 0 for bodyweight).`,
+        };
+      }
+      if (typeof ex.reps !== 'number' || isNaN(ex.reps) || ex.reps < 0 || (ex.trackingMode === 'sets' && ex.reps < 1)) {
+        return {
+          success: false,
+          message: `Exercise #${i + 1} (${name}): Please enter the number of reps performed.`,
+        };
+      }
+      if (ex.trackingMode === 'sets') {
+        if (!ex.sets || isNaN(ex.sets) || ex.sets < 1) {
+          return {
+            success: false,
+            message: `Exercise #${i + 1} (${name}): Please enter the number of sets completed.`,
+          };
+        }
+        normalizedExercises.push({
+          id: ex.id || `EX-${Date.now()}-${i}`,
+          exerciseName: name,
+          weightKg: Math.round(ex.weightKg * 100) / 100,
+          reps: Math.round(ex.reps),
+          trackingMode: 'sets',
+          sets: Math.round(ex.sets),
+        });
+      } else {
+        if (!ex.durationValue || isNaN(ex.durationValue) || ex.durationValue <= 0) {
+          return {
+            success: false,
+            message: `Exercise #${i + 1} (${name}): Please enter the time period completed.`,
+          };
+        }
+        const unit = ex.durationUnit === 'min' ? 'min' : 'sec';
+        const durationSeconds =
+          ex.durationSeconds ?? (unit === 'min' ? Math.round(ex.durationValue * 60) : Math.round(ex.durationValue));
+        normalizedExercises.push({
+          id: ex.id || `EX-${Date.now()}-${i}`,
+          exerciseName: name,
+          weightKg: Math.round(ex.weightKg * 100) / 100,
+          reps: Math.round(ex.reps),
+          trackingMode: 'time_period',
+          durationValue: Math.round(ex.durationValue * 100) / 100,
+          durationUnit: unit,
+          durationSeconds,
+        });
+      }
     }
 
     const pkg = clientPackages.find((p) => p.id === booking.packageId);
@@ -2320,25 +2388,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
     updateDocument('clients', booking.clientId, { sessionCreditsRemaining: newBalance });
 
-    // Update booking status
+    // Update booking status with exercises and notes
     const completedAtStr = new Date().toISOString();
+    const resolvedNotes = workoutNotes?.trim() || booking.workoutNotes || '';
+    const bookingPatch: Partial<SessionBooking> = {
+      status: 'Completed',
+      exercises: normalizedExercises,
+      completedAt: completedAtStr,
+      ...(resolvedNotes ? { workoutNotes: resolvedNotes } : {}),
+    };
+
     setBookings((prev) =>
       prev.map((b) =>
         b.id === bookingId
           ? {
               ...b,
-              status: 'Completed',
-              workoutNotes: workoutNotes || b.workoutNotes,
-              completedAt: completedAtStr,
+              ...bookingPatch,
             }
           : b
       )
     );
-    updateDocument('bookings', bookingId, {
-      status: 'Completed',
-      workoutNotes: workoutNotes || booking.workoutNotes,
-      completedAt: completedAtStr,
-    });
+    updateDocument('bookings', bookingId, bookingPatch);
 
     // Ledger transaction
     const newTxn: SessionTransaction = {
