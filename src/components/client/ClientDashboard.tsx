@@ -292,6 +292,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
   const clientSavedCards = savedCards.filter((c) => c.clientId === activeClientId);
   const pendingPackages = clientPackages.filter((p) => p.clientId === activeClientId && p.status === 'Pending Payment');
   const activeSubscription = subscriptions.find((s) => s.clientId === activeClientId && s.status === 'Active');
+  const failedSubscription = subscriptions.find((s) => s.clientId === activeClientId && s.status === 'Payment Failed');
 
   const handleClientReloadStripe = async () => {
     setIsReloadingStripe(true);
@@ -969,6 +970,10 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
   const printReceipt = (payId: string) => {
     const pay = clientPayments.find((p) => p.id === payId);
     if (!pay) return;
+    const matchedDef = packageDefinitions.find(
+      (d) => d.name.toLowerCase() === (pay.packageName || '').replace(/\s*\(Auto-Pay Renewal\)$/i, '').trim().toLowerCase()
+    );
+    const validityDays = matchedDef?.validityDays || 30;
 
     const receiptHtml = `
       <div style="border: 2px solid #1e3a8a; padding: 24px; border-radius: 12px; max-width: 600px; margin: 0 auto; font-family: sans-serif;">
@@ -986,7 +991,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
           <p><strong>CLIENT NAME:</strong> ${client.fullName}</p>
           <p><strong>COMMUNITY:</strong> ${client.communityName}, Dubai, UAE</p>
           <p><strong>PACKAGE PURCHASED:</strong> ${pay.packageName}</p>
-          <p><strong>DESCRIPTION:</strong> Personal Training package containing training sessions with assigned trainer ${trainer?.fullName}. Valid for 30 calendar days in Asia/Dubai timezone.</p>
+          <p><strong>DESCRIPTION:</strong> Personal Training package containing training sessions with assigned trainer ${trainer?.fullName || 'Specialist'}. Valid for ${validityDays} calendar days in Asia/Dubai timezone.</p>
           <p><strong>PAYMENT METHOD:</strong> ${pay.paymentMethod}</p>
           <p><strong>DATE & TIME:</strong> ${formatReadableDate(pay.paymentDate) || pay.paymentDate}${(() => { const t = formatDubaiTime((pay as any).paidAt || (pay as any).failedAt || pay.createdAt); return t ? ` at ${t}` : ' GST'; })()}</p>
         </div>
@@ -1889,7 +1894,13 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
                     </div>
 
                     <div className="bg-white p-3 rounded-xl border border-slate-200 text-slate-700 text-xs space-y-1">
-                      <div><strong>Description:</strong> Personal training package with trainer {trainer?.fullName || 'Specialist'}. Valid for 30 calendar days.</div>
+                      <div>
+                        <strong>Description:</strong> Personal training package with trainer {trainer?.fullName || 'Specialist'}. Valid for{' '}
+                        {packageDefinitions.find(
+                          (d) => d.name.toLowerCase() === (p.packageName || '').replace(/\s*\(Auto-Pay Renewal\)$/i, '').trim().toLowerCase()
+                        )?.validityDays || 30}{' '}
+                        calendar days.
+                      </div>
                       <div className="text-[11px] text-slate-500">
                         Method: {p.paymentMethod} • Date: {formatReadableDate(p.paymentDate) || p.paymentDate}
                         {(() => {
@@ -1978,11 +1989,25 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
               </div>
             )}
 
+            {failedSubscription && !activeSubscription && (
+              <div className="bg-red-500/20 border border-red-400/50 rounded-xl p-3 text-xs text-red-100 flex items-start space-x-2">
+                <AlertTriangle className="w-4 h-4 text-red-300 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-white block">Automatic Renewal Payment Failed ({failedSubscription.packageName})</strong>
+                  <span>Your saved card ({failedSubscription.cardBrand} ending in {failedSubscription.last4Digits}) could not be charged for AED {failedSubscription.amountAED}. Please add or update your default card below and retry renewal.</span>
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2">
               <div className="text-xs text-purple-300">
                 {activeSubscription ? (
                   <span>
                     Next Auto-Deduction Date: <strong className="text-white">{activeSubscription.nextPaymentDate}</strong> (AED {activeSubscription.amountAED})
+                  </span>
+                ) : failedSubscription ? (
+                  <span className="text-red-200 font-bold">
+                    Auto-Pay paused due to card decline on {failedSubscription.packageName} (AED {failedSubscription.amountAED})
                   </span>
                 ) : (
                   <span>No active recurring charge scheduled.</span>
@@ -2039,7 +2064,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
                           </span>
                         ) : (
                           <button
-                            onClick={() => setDefaultSavedCard(clientId, card.id)}
+                            onClick={() => setDefaultSavedCard(activeClientId, card.id)}
                             className="text-[11px] font-bold text-blue-600 hover:underline shrink-0"
                           >
                             Set as Default

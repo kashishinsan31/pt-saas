@@ -431,8 +431,8 @@ export async function processStripePaymentSuccess(
         await updateDoc(doc(db, 'clientPackages', activePkg.id), { status: supersededStatus });
       }
 
-      const basePrice = metadata.basePriceAED ? parseFloat(metadata.basePriceAED) : Math.round(amountAED / 1.05);
-      const vatAmt = metadata.vatAmountAED ? parseFloat(metadata.vatAmountAED) : Math.round(amountAED - basePrice);
+      const basePrice = metadata.basePriceAED ? parseFloat(metadata.basePriceAED) : Math.round((amountAED / 1.05) * 100) / 100;
+      const vatAmt = metadata.vatAmountAED ? parseFloat(metadata.vatAmountAED) : Math.round((amountAED - basePrice) * 100) / 100;
 
       const newClientPackage: ClientPackage = {
         id: targetPackageId,
@@ -483,8 +483,8 @@ export async function processStripePaymentSuccess(
       clientId: client.id,
       packageId: targetPackageId,
       packageName,
-      baseAmountAED: Math.round(amountAED / 1.05),
-      vatAmountAED: Math.round(amountAED - Math.round(amountAED / 1.05)),
+      baseAmountAED: Math.round((amountAED / 1.05) * 100) / 100,
+      vatAmountAED: Math.round((amountAED - Math.round((amountAED / 1.05) * 100) / 100) * 100) / 100,
       amountAED,
       amountPaidAED: amountAED,
       outstandingBalanceAED: 0,
@@ -629,8 +629,8 @@ export async function processStripePaymentFailure(event: any): Promise<StripeWeb
         clientId,
         packageId: metadata.packageId || 'NONE',
         packageName: metadata.packageName || 'Personal Training Package',
-        baseAmountAED: Math.round(amountAED / 1.05),
-        vatAmountAED: Math.round(amountAED - Math.round(amountAED / 1.05)),
+        baseAmountAED: Math.round((amountAED / 1.05) * 100) / 100,
+        vatAmountAED: Math.round((amountAED - Math.round((amountAED / 1.05) * 100) / 100) * 100) / 100,
         amountAED,
         amountPaidAED: 0,
         outstandingBalanceAED: amountAED,

@@ -31,7 +31,7 @@ export const SubscriptionsModule: React.FC = () => {
 
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'Active' | 'Pending' | 'Cancelled'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'Active' | 'Pending' | 'Payment Failed' | 'Cancelled'>('all');
   const [autoPayLogFilter, setAutoPayLogFilter] = useState<'all' | 'Paid' | 'Failed'>('all');
 
   const [loadingSubId, setLoadingSubId] = useState<string | null>(null);
@@ -152,6 +152,7 @@ export const SubscriptionsModule: React.FC = () => {
               <option value="all">All Subscriptions ({subscriptions.length})</option>
               <option value="Active">Active ({subscriptions.filter((s) => s.status === 'Active').length})</option>
               <option value="Pending">Paused / Pending ({subscriptions.filter((s) => s.status === 'Pending').length})</option>
+              <option value="Payment Failed">Payment Failed ({subscriptions.filter((s) => s.status === 'Payment Failed').length})</option>
               <option value="Cancelled">Cancelled ({subscriptions.filter((s) => s.status === 'Cancelled').length})</option>
             </select>
           </div>
@@ -329,6 +330,8 @@ export const SubscriptionsModule: React.FC = () => {
                             className={`px-2.5 py-1 rounded-full text-[11px] font-black ${
                               sub.status === 'Active'
                                 ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                : sub.status === 'Payment Failed'
+                                ? 'bg-red-100 text-red-800 border border-red-300'
                                 : sub.status === 'Cancelled'
                                 ? 'bg-slate-200 text-slate-700 border border-slate-300'
                                 : 'bg-amber-100 text-amber-800 border border-amber-200'
@@ -384,14 +387,51 @@ export const SubscriptionsModule: React.FC = () => {
                                 </button>
                               </>
                             ) : sub.status === 'Pending' ? (
-                              <button
-                                type="button"
-                                onClick={() => resumeSubscription(sub.id)}
-                                className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-[11px] font-bold flex items-center space-x-1 cursor-pointer"
-                              >
-                                <PlayCircle className="w-3 h-3" />
-                                <span>Resume</span>
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => resumeSubscription(sub.id)}
+                                  className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-[11px] font-bold flex items-center space-x-1 cursor-pointer"
+                                >
+                                  <PlayCircle className="w-3 h-3" />
+                                  <span>Resume</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => cancelSubscription(sub.id)}
+                                  className="px-2 py-1.5 bg-red-50 hover:bg-red-100 text-red-800 border border-red-200 rounded-lg text-[11px] font-bold flex items-center space-x-1 cursor-pointer"
+                                  title="Cancel subscription"
+                                >
+                                  <XCircle className="w-3 h-3" />
+                                  <span>Cancel</span>
+                                </button>
+                              </>
+                            ) : sub.status === 'Payment Failed' ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleTestAutoPay(sub.id, sub.clientId, sub.packageDefinitionId)}
+                                  disabled={isThisLoading}
+                                  className="px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[11px] font-extrabold flex items-center space-x-1 shadow-2xs transition-colors cursor-pointer"
+                                  title="Retry automatic Stripe charge"
+                                >
+                                  {isThisLoading ? (
+                                    <RefreshCw className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <Zap className="w-3 h-3 text-amber-300" />
+                                  )}
+                                  <span>{isThisLoading ? 'Retrying...' : 'Retry Auto-Pay'}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => cancelSubscription(sub.id)}
+                                  className="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-[11px] font-bold flex items-center space-x-1 cursor-pointer"
+                                  title="Cancel subscription"
+                                >
+                                  <XCircle className="w-3 h-3" />
+                                  <span>Cancel</span>
+                                </button>
+                              </>
                             ) : (
                               <span className="text-[11px] text-slate-400 italic">Cancelled</span>
                             )}
@@ -436,6 +476,8 @@ export const SubscriptionsModule: React.FC = () => {
                         className={`px-3 py-1 rounded-full text-xs font-bold ${
                           sub.status === 'Active'
                             ? 'bg-emerald-100 text-emerald-800'
+                            : sub.status === 'Payment Failed'
+                            ? 'bg-red-100 text-red-800 border border-red-300'
                             : sub.status === 'Cancelled'
                             ? 'bg-slate-200 text-slate-700'
                             : 'bg-amber-100 text-amber-800'
@@ -507,14 +549,48 @@ export const SubscriptionsModule: React.FC = () => {
                         </button>
                       </div>
                     ) : sub.status === 'Pending' ? (
-                      <button
-                        type="button"
-                        onClick={() => resumeSubscription(sub.id)}
-                        className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-bold flex items-center space-x-1 cursor-pointer"
-                      >
-                        <PlayCircle className="w-3.5 h-3.5" />
-                        <span>Resume Subscription</span>
-                      </button>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => resumeSubscription(sub.id)}
+                          className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-bold flex items-center space-x-1 cursor-pointer"
+                        >
+                          <PlayCircle className="w-3.5 h-3.5" />
+                          <span>Resume Subscription</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => cancelSubscription(sub.id)}
+                          className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-800 border border-red-200 rounded-lg text-xs font-bold flex items-center space-x-1 cursor-pointer"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>Cancel</span>
+                        </button>
+                      </div>
+                    ) : sub.status === 'Payment Failed' ? (
+                      <div className="flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => handleTestAutoPay(sub.id, sub.clientId, sub.packageDefinitionId)}
+                          disabled={isThisLoading}
+                          className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-extrabold flex items-center space-x-1 shadow-xs transition-colors cursor-pointer"
+                        >
+                          {isThisLoading ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Zap className="w-3.5 h-3.5 text-amber-300" />
+                          )}
+                          <span>{isThisLoading ? 'Retrying...' : 'Retry Auto-Pay'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => cancelSubscription(sub.id)}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold flex items-center space-x-1 cursor-pointer"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>Cancel</span>
+                        </button>
+                      </div>
                     ) : (
                       <span className="text-xs text-slate-400 font-medium italic">Subscription Cancelled</span>
                     )}
@@ -551,7 +627,7 @@ export const SubscriptionsModule: React.FC = () => {
                 autoPayLogFilter === 'all' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              All Logs ({payments.filter((p) => p.paymentMethod === 'Stripe' || p.status === 'Failed').length})
+              All Logs ({payments.filter((p) => (p.paymentMethod === 'Stripe' || p.status === 'Failed') && p.status !== 'Superseded').length})
             </button>
             <button
               type="button"
@@ -560,7 +636,7 @@ export const SubscriptionsModule: React.FC = () => {
                 autoPayLogFilter === 'Paid' ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Successful ({payments.filter((p) => (p.paymentMethod === 'Stripe' || p.status === 'Paid') && p.status === 'Paid').length})
+              Successful ({payments.filter((p) => p.paymentMethod === 'Stripe' && p.status === 'Paid').length})
             </button>
             <button
               type="button"
@@ -588,7 +664,7 @@ export const SubscriptionsModule: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium">
               {payments
-                .filter((p) => p.paymentMethod === 'Stripe' || p.status === 'Failed')
+                .filter((p) => (p.paymentMethod === 'Stripe' || p.status === 'Failed') && p.status !== 'Superseded')
                 .filter((p) => autoPayLogFilter === 'all' || p.status === autoPayLogFilter)
                 .length === 0 ? (
                 <tr>

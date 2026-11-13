@@ -79,13 +79,25 @@ export function formatDubaiDateTime(dateOrIso?: string | Date, fallbackDateStr?:
 }
 
 /**
+ * Parses a YYYY-MM-DD (or ISO) string safely in Asia/Dubai (+04:00)
+ */
+function parseDubaiDateNoon(dateStr: string): Date {
+  if (!dateStr) return new Date(NaN);
+  const trimmed = dateStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return new Date(`${trimmed}T12:00:00+04:00`);
+  }
+  return new Date(trimmed);
+}
+
+/**
  * Calculates package expiry date from a given start date YYYY-MM-DD and validity days
  */
 export function calculateExpiryDate(startDateStr: string, validityDays: number = 30): string {
-  const d = new Date(startDateStr);
+  const d = parseDubaiDateNoon(startDateStr);
   if (isNaN(d.getTime())) return startDateStr;
-  d.setDate(d.getDate() + (validityDays || 30));
-  return formatDubaiDate(d);
+  const target = new Date(d.getTime() + (validityDays || 30) * 24 * 60 * 60 * 1000);
+  return formatDubaiDate(target);
 }
 
 /**
@@ -96,14 +108,15 @@ export function calculate30DayExpiry(startDateStr: string): string {
 }
 
 /**
- * Calculates calendar days remaining between today and expiry date (YYYY-MM-DD)
+ * Calculates calendar days remaining between today and expiry date (YYYY-MM-DD) in Asia/Dubai timezone
  */
 export function getDaysRemaining(expiryDateStr: string): number {
   const todayStr = formatDubaiDate(new Date());
-  const today = new Date(todayStr);
-  const expiry = new Date(expiryDateStr);
+  const today = parseDubaiDateNoon(todayStr);
+  const expiry = parseDubaiDateNoon(expiryDateStr);
+  if (isNaN(today.getTime()) || isNaN(expiry.getTime())) return 0;
   const diffTime = expiry.getTime() - today.getTime();
-  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  return Math.round(diffTime / (1000 * 60 * 60 * 24));
 }
 
 /**
@@ -146,9 +159,13 @@ export function evaluateCancellationPolicy(
   startTimeStr: string,
   now: Date = new Date()
 ): { isEligibleForRefund: boolean; hoursDiff: number } {
-  const [hours, minutes] = startTimeStr.split(':').map(Number);
-  const sessionDate = new Date(sessionDateStr);
-  sessionDate.setHours(hours, minutes, 0, 0);
+  const [rawHours = '0', rawMinutes = '0'] = (startTimeStr || '00:00').split(':');
+  const hh = String(parseInt(rawHours, 10) || 0).padStart(2, '0');
+  const mm = String(parseInt(rawMinutes, 10) || 0).padStart(2, '0');
+  const datePart = /^\d{4}-\d{2}-\d{2}$/.test(sessionDateStr.trim())
+    ? sessionDateStr.trim()
+    : formatDubaiDate(sessionDateStr);
+  const sessionDate = new Date(`${datePart}T${hh}:${mm}:00+04:00`);
 
   const diffMs = sessionDate.getTime() - now.getTime();
   const hoursDiff = diffMs / (1000 * 60 * 60);

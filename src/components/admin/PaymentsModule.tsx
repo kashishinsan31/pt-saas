@@ -96,16 +96,22 @@ export const PaymentsModule: React.FC = () => {
     const pay = payments.find((p) => p.id === payId);
     if (!pay) return;
     const client = clients.find((c) => c.id === pay.clientId);
+    const matchedDef = packageDefinitions.find(
+      (d) => d.name.toLowerCase() === (pay.packageName || '').replace(/\s*\(Auto-Pay Renewal\)$/i, '').trim().toLowerCase()
+    );
+    const validityDays = matchedDef?.validityDays || 30;
+    const badgeBg = pay.status === 'Paid' ? '#dcfce7' : pay.status === 'Failed' ? '#fee2e2' : '#fef3c7';
+    const badgeFg = pay.status === 'Paid' ? '#166534' : pay.status === 'Failed' ? '#991b1b' : '#92400e';
 
     const receiptHtml = `
-      <div style="border: 2px solid #1e3a8a; padding: 24px; border-radius: 12px; max-w: 600px; margin: 0 auto;">
-        <div style="display: flex; justify-between: space-between; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px;">
+      <div style="border: 2px solid #1e3a8a; padding: 24px; border-radius: 12px; max-width: 600px; margin: 0 auto;">
+        <div style="display: flex; justify-content: space-between; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px;">
           <div>
             <h2 style="margin: 0; color: #1e3a8a;">OFFICIAL PAYMENT RECEIPT</h2>
             <p style="margin: 4px 0 0 0; font-size: 12px; color: #64748b;">Receipt ID: ${pay.id} • Stripe Ref: ${pay.transactionReference}</p>
           </div>
           <div style="text-align: right;">
-            <span style="background: #dcfce7; color: #166534; padding: 4px 12px; border-radius: 9999px; font-weight: bold; font-size: 12px;">STATUS: ${pay.status.toUpperCase()}</span>
+            <span style="background: ${badgeBg}; color: ${badgeFg}; padding: 4px 12px; border-radius: 9999px; font-weight: bold; font-size: 12px;">STATUS: ${pay.status.toUpperCase()}</span>
           </div>
         </div>
 
@@ -134,7 +140,7 @@ export const PaymentsModule: React.FC = () => {
           </thead>
           <tbody>
             <tr>
-              <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${pay.packageName} (Strict 30-Day Expiry)</td>
+              <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${pay.packageName} (${validityDays}-Day Validity)</td>
               <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: bold;">AED ${pay.amountAED.toLocaleString()}</td>
             </tr>
           </tbody>

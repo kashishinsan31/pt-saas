@@ -167,7 +167,7 @@ export const PackagesModule: React.FC = () => {
     const basePrice = selectedPkgDef.priceAED;
     const subtotal = Math.max(0, basePrice - discountAmount);
     const vatAmount = Math.round(subtotal * 0.05 * 100) / 100;
-    const totalPayable = subtotal + vatAmount;
+    const totalPayable = Math.round((subtotal + vatAmount) * 100) / 100;
 
     if (allocationMode === 'DUE') {
       const res = createDuePackage(selectedClientId, selectedPkgDef.id, {

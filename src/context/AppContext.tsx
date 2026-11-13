@@ -117,7 +117,7 @@ interface AppContextType {
     cardDetails?: { brand: string; last4: string },
     recurringConsent?: boolean,
     customStripeChargeId?: string,
-    discountInfo?: { discountCode?: string; discountAmountAED?: number; vatAmountAED?: number; totalAmountAED?: number },
+    discountInfo?: { discountCode?: string; discountAmountAED?: number; baseAmountAED?: number; vatAmountAED?: number; totalAmountAED?: number },
     customPriceAED?: number,
     customValidityDays?: number,
     customPackageName?: string,
@@ -841,7 +841,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // 1. Identify client's earlier package and subscription to renew the EXACT same package with exact same amount
-    const clientSub = subscriptions.find((s) => s.clientId === clientId && (s.status === 'Active' || s.status === 'Pending'));
+    const clientSub = subscriptions.find(
+      (s) => s.clientId === clientId && (s.status === 'Active' || s.status === 'Pending' || s.status === 'Payment Failed')
+    );
     const recentPkg = clientPackages
       .filter((p) => p.clientId === clientId)
       .sort((a, b) => new Date(b.expiryDate).getTime() - new Date(a.expiryDate).getTime())[0];
@@ -852,9 +854,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const pkgDef = packageDefinitions.find((p) => p.id === targetDefId);
     const client = clients.find((c) => c.id === clientId);
 
-    // EXACT same amount paid earlier - accurately separating base price from 5% UAE VAT
-    const targetTotalAmountAED = earlierPkg?.packagePriceAED || clientSub?.amountAED || (pkgDef ? Math.round(pkgDef.priceAED * 1.05 * 100) / 100 : 1260);
-    const targetBaseAmountAED = earlierPkg?.basePriceAED !== undefined ? earlierPkg.basePriceAED : Math.round((targetTotalAmountAED / 1.05) * 100) / 100;
+    // EXACT same amount paid earlier - accurately separating base price from 5% UAE VAT (defend against prior double-VAT records)
+    const rawEarlierTotal = earlierPkg?.packagePriceAED;
+    const defTotalWithVat = pkgDef ? Math.round(pkgDef.priceAED * 1.05 * 100) / 100 : undefined;
+    const isCorruptedDoubleVat =
+      Boolean(pkgDef && earlierPkg?.basePriceAED && defTotalWithVat) &&
+      Math.abs((earlierPkg!.basePriceAED || 0) - defTotalWithVat!) < 0.02 &&
+      Math.abs((rawEarlierTotal || 0) - Math.round(defTotalWithVat! * 1.05 * 100) / 100) < 0.03;
+
+    const targetTotalAmountAED = isCorruptedDoubleVat
+      ? (clientSub?.amountAED || defTotalWithVat!)
+      : (rawEarlierTotal || clientSub?.amountAED || defTotalWithVat || 1260);
+    const targetBaseAmountAED =
+      !isCorruptedDoubleVat && earlierPkg?.basePriceAED !== undefined && Math.abs(earlierPkg.basePriceAED + (earlierPkg.vatAmountAED || 0) - targetTotalAmountAED) < 0.05
+        ? earlierPkg.basePriceAED
+        : (pkgDef && Math.abs(Math.round(pkgDef.priceAED * 1.05 * 100) / 100 - targetTotalAmountAED) < 0.02
+            ? pkgDef.priceAED
+            : Math.round((targetTotalAmountAED / 1.05) * 100) / 100);
     const targetVatAmountAED = Math.round((targetTotalAmountAED - targetBaseAmountAED) * 100) / 100;
 
     // EXACT same package name
@@ -863,11 +879,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // EXACT same session count
     const targetSessionCount = earlierPkg?.totalSessions || pkgDef?.sessionCount || 12;
 
-    // EXACT same validity duration (days)
+    // EXACT same validity duration (days), anchored in Asia/Dubai (+04:00)
     let targetValidityDays = pkgDef?.validityDays || 30;
     if (earlierPkg && earlierPkg.startDate && earlierPkg.expiryDate) {
-      const sDate = new Date(earlierPkg.startDate).getTime();
-      const eDate = new Date(earlierPkg.originalExpiryDate || earlierPkg.expiryDate).getTime();
+      const sDate = new Date(`${earlierPkg.startDate}T12:00:00+04:00`).getTime();
+      const eDate = new Date(`${earlierPkg.originalExpiryDate || earlierPkg.expiryDate}T12:00:00+04:00`).getTime();
       const diffDays = Math.round((eDate - sDate) / (1000 * 60 * 60 * 24));
       if (diffDays > 0) {
         targetValidityDays = diffDays;
@@ -924,6 +940,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           transactionReference: stripeRes.stripeChargeId || 'ERR_CARD_DECLINED',
           stripePaymentIntentId: stripeRes.stripeChargeId || 'ERR_CARD_DECLINED',
           status: 'Failed',
+          notes: `Stripe Auto-Pay Declined: ${stripeRes.message}`,
           createdAt: new Date().toISOString(),
         };
 
@@ -946,7 +963,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // Update subscription status to 'Payment Failed' and persist to Firestore
         setSubscriptions((subs) =>
           subs.map((s) => {
-            if (s.clientId === clientId && s.status === 'Active') {
+            if (s.clientId === clientId && (s.status === 'Active' || s.status === 'Pending')) {
               updateDocument('subscriptions', s.id, { status: 'Payment Failed' as const });
               return { ...s, status: 'Payment Failed' as const };
             }
@@ -977,7 +994,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         baseAmountAED: targetBaseAmountAED,
         vatAmountAED: targetVatAmountAED,
         totalAmountAED: targetTotalAmountAED,
-      } as any,
+      },
       targetBaseAmountAED,
       targetValidityDays,
       targetPackageName,
@@ -1002,6 +1019,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const isSweepingRef = useRef(false);
 
   const runAutoPaySweepEngine = async (): Promise<{ processedCount: number; details: string[] }> => {
+    if (currentUser?.role !== 'admin') {
+      return { processedCount: 0, details: ['Auto-Pay sweep only runs in an active Admin session.'] };
+    }
     if (isSweepingRef.current) {
       return { processedCount: 0, details: ['Auto-pay sweep already in progress.'] };
     }
@@ -1114,21 +1134,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Auto-Pay Background Sweeper Scheduler (Periodic sweep without cascading feedback loops)
+  // Auto-Pay Background Sweeper Scheduler (Admin-only, uses latest state ref without stale closures)
+  const runSweepLatestRef = useRef(runAutoPaySweepEngine);
+  runSweepLatestRef.current = runAutoPaySweepEngine;
+
   useEffect(() => {
+    if (currentUser?.role !== 'admin') return;
     const timer = setTimeout(() => {
-      runAutoPaySweepEngine();
-    }, 2000);
+      runSweepLatestRef.current();
+    }, 3000);
 
     const interval = setInterval(() => {
-      runAutoPaySweepEngine();
+      runSweepLatestRef.current();
     }, 45000);
 
     return () => {
       clearTimeout(timer);
       clearInterval(interval);
     };
-  }, []);
+  }, [currentUser?.role]);
 
   const loginAsRole = (role: UserRole, specificId?: string) => {
     let match: User | undefined;
@@ -1389,7 +1413,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     cardDetails?: { brand: string; last4: string },
     recurringConsent?: boolean,
     customStripeChargeId?: string,
-    discountInfo?: { discountCode?: string; discountAmountAED?: number; vatAmountAED?: number; totalAmountAED?: number },
+    discountInfo?: { discountCode?: string; discountAmountAED?: number; baseAmountAED?: number; vatAmountAED?: number; totalAmountAED?: number },
     customPriceAED?: number,
     customValidityDays?: number,
     customPackageName?: string,
@@ -1420,11 +1444,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const txRef = customStripeChargeId || `tx_stripe_${Date.now()}`;
 
     // Financial Breakdown: Base Price (excl VAT) - Discount + 5% VAT added separately
-    const basePrice = effectivePrice;
+    const basePrice = discountInfo?.baseAmountAED !== undefined ? discountInfo.baseAmountAED : effectivePrice;
     const discountAmt = discountInfo?.discountAmountAED || 0;
     const subtotal = Math.max(0, basePrice - discountAmt);
     const vatAmt = discountInfo?.vatAmountAED !== undefined ? discountInfo.vatAmountAED : Math.round(subtotal * 0.05 * 100) / 100;
-    const totalAmount = discountInfo?.totalAmountAED !== undefined ? discountInfo.totalAmountAED : subtotal + vatAmt;
+    const totalAmount = discountInfo?.totalAmountAED !== undefined ? discountInfo.totalAmountAED : Math.round((subtotal + vatAmt) * 100) / 100;
 
     // Create payment record
     const newPayment: PaymentRecord = {
@@ -1459,9 +1483,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : '';
 
       setSubscriptions((prev) => {
-        // Cancel all existing active/pending subscriptions for this specific client
+        // Cancel all existing non-cancelled subscriptions for this specific client
         const updated = prev.map((s) => {
-          if (s.clientId === clientId && (s.status === 'Active' || s.status === 'Pending')) {
+          if (s.clientId === clientId && s.status !== 'Cancelled') {
             updateDocument('subscriptions', s.id, { status: 'Cancelled' as const });
             return { ...s, status: 'Cancelled' as const };
           }
@@ -1611,7 +1635,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       : Math.round(subtotal * 0.05 * 100) / 100;
     const totalAmount = customOptions?.discountInfo?.totalAmountAED !== undefined
       ? customOptions.discountInfo.totalAmountAED
-      : subtotal + vatAmount;
+      : Math.round((subtotal + vatAmount) * 100) / 100;
 
     const startDate = formatDubaiDate(new Date());
     const expiryDate = calculateExpiryDate(startDate, effectiveValidityDays);
@@ -1720,7 +1744,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const paymentMethod = options?.paymentMethod || 'Card';
     const effectiveBasePrice = options?.customPriceAED !== undefined ? options.customPriceAED : pkgDef.priceAED;
     const vatAmount = Math.round(effectiveBasePrice * 0.05 * 100) / 100;
-    const totalAmount = effectiveBasePrice + vatAmount;
+    const totalAmount = Math.round((effectiveBasePrice + vatAmount) * 100) / 100;
     const effectiveValidityDays = options?.customValidityDays !== undefined ? options.customValidityDays : (pkgDef.validityDays || 30);
     const baseSessionCount = options?.customSessionCount !== undefined ? options.customSessionCount : pkgDef.sessionCount;
 
@@ -2049,7 +2073,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (cardDetails.isDefault ?? true) {
       setSubscriptions((prev) => {
         const updatedSubs = prev.map((s) => {
-          if (s.clientId === client.id && (s.status === 'Active' || s.status === 'Pending')) {
+          if (s.clientId === client.id && s.status !== 'Cancelled') {
             updateDocument('subscriptions', s.id, { status: 'Cancelled' as const });
             return { ...s, status: 'Cancelled' as const };
           }
@@ -2087,7 +2111,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       creditChange: pkg.totalSessions,
       previousBalance: 0,
       newBalance: pkg.totalSessions,
-      reason: `Client payment collected via ${cardDetails.brand} ending in ${cardDetails.last4}. Plan activated with 30-day validity until ${expiryDate}.`,
+      reason: `Client payment collected via ${cardDetails.brand} ending in ${cardDetails.last4}. Plan activated with ${pkgDef?.validityDays || 30}-day validity until ${expiryDate}.`,
       responsibleUserId: currentUser?.id || client.id,
       responsibleRole: currentUser?.role || 'client',
     };
@@ -2291,6 +2315,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       remainingSessions: newBalance,
       status: newPkgStatus,
     });
+    setClients((prev) =>
+      prev.map((c) => (c.id === booking.clientId ? { ...c, sessionCreditsRemaining: newBalance } : c))
+    );
+    updateDocument('clients', booking.clientId, { sessionCreditsRemaining: newBalance });
 
     // Update booking status
     const completedAtStr = new Date().toISOString();
@@ -2480,6 +2508,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         remainingSessions: newBal,
         status: newPkgStatus,
       });
+      setClients((prev) =>
+        prev.map((c) => (c.id === booking.clientId ? { ...c, sessionCreditsRemaining: newBal } : c))
+      );
+      updateDocument('clients', booking.clientId, { sessionCreditsRemaining: newBal });
 
       const cancelledAtStr = new Date().toISOString();
       setBookings((prev) =>
@@ -2602,6 +2634,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const newBal = Math.max(0, prevBal - 1);
       const newLateCount = pkg.lateCancellationDeductions + 1;
 
+      const newPkgStatus = newBal === 0 ? 'Completed' : pkg.status;
       setClientPackages((prev) =>
         prev.map((p) =>
           p.id === pkg.id
@@ -2609,6 +2642,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 ...p,
                 lateCancellationDeductions: newLateCount,
                 remainingSessions: newBal,
+                status: newPkgStatus,
               }
             : p
         )
@@ -2616,7 +2650,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updateDocument('clientPackages', pkg.id, {
         lateCancellationDeductions: newLateCount,
         remainingSessions: newBal,
+        status: newPkgStatus,
       });
+      setClients((prev) =>
+        prev.map((c) => (c.id === booking.clientId ? { ...c, sessionCreditsRemaining: newBal } : c))
+      );
+      updateDocument('clients', booking.clientId, { sessionCreditsRemaining: newBal });
 
       setBookings((prev) =>
         prev.map((b) =>
@@ -2716,6 +2755,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newBal = Math.max(0, prevBal - 1);
     const newNoShowCount = pkg.noShowDeductions + 1;
 
+    const newPkgStatus = newBal === 0 ? 'Completed' : pkg.status;
     setClientPackages((prev) =>
       prev.map((p) =>
         p.id === pkg.id
@@ -2723,6 +2763,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ...p,
               noShowDeductions: newNoShowCount,
               remainingSessions: newBal,
+              status: newPkgStatus,
             }
           : p
       )
@@ -2730,7 +2771,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     updateDocument('clientPackages', pkg.id, {
       noShowDeductions: newNoShowCount,
       remainingSessions: newBal,
+      status: newPkgStatus,
     });
+    setClients((prev) =>
+      prev.map((c) => (c.id === booking.clientId ? { ...c, sessionCreditsRemaining: newBal } : c))
+    );
+    updateDocument('clients', booking.clientId, { sessionCreditsRemaining: newBal });
 
     setBookings((prev) =>
       prev.map((b) =>
@@ -2862,6 +2908,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     });
 
+    if (restoredSessions !== pkg.remainingSessions || (restoredSessions > 0 && pkg.status !== 'Active')) {
+      setClients((prev) =>
+        prev.map((c) =>
+          c.id === pkg.clientId
+            ? { ...c, activePackageId: pkg.id, sessionCreditsRemaining: restoredSessions }
+            : c
+        )
+      );
+      updateDocument('clients', pkg.clientId, {
+        activePackageId: pkg.id,
+        sessionCreditsRemaining: restoredSessions,
+      });
+    }
+
     // Synchronize client's active recurring subscription so nextPaymentDate matches the adjusted validity date
     setSubscriptions((prevSubs) =>
       prevSubs.map((sub) => {
@@ -2894,7 +2954,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const prevBal = pkg.remainingSessions;
     const newBal = Math.max(0, prevBal + creditDelta);
-    const updatedStatus = (newBal > 0 && pkg.status === 'Completed' ? 'Active' : pkg.status) as ClientPackageStatus;
+    const updatedStatus = (newBal === 0 ? 'Completed' : pkg.status === 'Completed' ? 'Active' : pkg.status) as ClientPackageStatus;
 
     setClientPackages((prev) =>
       prev.map((p) =>
@@ -2911,6 +2971,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       remainingSessions: newBal,
       status: updatedStatus,
     });
+    setClients((prev) =>
+      prev.map((c) => (c.id === pkg.clientId ? { ...c, sessionCreditsRemaining: newBal } : c))
+    );
+    updateDocument('clients', pkg.clientId, { sessionCreditsRemaining: newBal });
 
     const newTxn: SessionTransaction = {
       id: `TXN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -3398,9 +3462,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (promo.discountType === 'percentage') {
       discountPercent = promo.discountValue;
-      discountAmountAED = Math.round((packagePriceAED * promo.discountValue) / 100);
+      discountAmountAED = Math.round(((packagePriceAED * promo.discountValue) / 100) * 100) / 100;
     } else {
-      discountAmountAED = Math.min(packagePriceAED, promo.discountValue);
+      discountAmountAED = Math.min(packagePriceAED, Math.round(promo.discountValue * 100) / 100);
       discountPercent = packagePriceAED > 0 ? Math.round((discountAmountAED / packagePriceAED) * 100) : 0;
     }
 

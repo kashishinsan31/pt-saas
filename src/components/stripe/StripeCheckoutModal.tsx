@@ -44,6 +44,13 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
   useEffect(() => {
     if (isOpen && initialPackageDef) {
       setActivePackageDef(initialPackageDef);
+      const pct = initialPackageDef.discountPercentage || 0;
+      setDiscountPercent(pct);
+      setDiscountAmountAED(pct ? Math.round(((initialPackageDef.priceAED * pct) / 100) * 100) / 100 : 0);
+      setAppliedPromoCode(pct ? 'PACKAGE_DISCOUNT' : '');
+      setPromoInput('');
+      setPromoError('');
+      setPromoSuccessMsg('');
     }
   }, [isOpen, initialPackageDef]);
 
@@ -264,7 +271,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
             clientId: client.id,
             packageId: packageDef.id,
             packageName: packageDef.name,
-            baseAmountAED: Math.round(totalPayableAED / 1.05),
+            baseAmountAED: subtotalAED,
             vatAmountAED: vatAmountAED,
             amountAED: totalPayableAED,
             amountPaidAED: 0,
@@ -444,7 +451,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
             clientId: client.id,
             packageId: packageDef.id,
             packageName: packageDef.name,
-            baseAmountAED: Math.round(totalPayableAED / 1.05),
+            baseAmountAED: subtotalAED,
             vatAmountAED: vatAmountAED,
             amountAED: totalPayableAED,
             amountPaidAED: 0,
@@ -541,7 +548,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
   const [discountPercent, setDiscountPercent] = useState<number>(packageDef.discountPercentage || 0);
   const [discountAmountAED, setDiscountAmountAED] = useState<number>(
     packageDef.discountPercentage
-      ? Math.round((packageDef.priceAED * packageDef.discountPercentage) / 100)
+      ? Math.round(((packageDef.priceAED * packageDef.discountPercentage) / 100) * 100) / 100
       : 0
   );
   const [appliedPromoCode, setAppliedPromoCode] = useState<string>(
@@ -581,7 +588,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
   const basePriceAED = packageDef.priceAED;
   const subtotalAED = Math.max(0, basePriceAED - discountAmountAED);
   const vatAmountAED = Math.round(subtotalAED * 0.05 * 100) / 100;
-  const totalPayableAED = subtotalAED + vatAmountAED;
+  const totalPayableAED = Math.round((subtotalAED + vatAmountAED) * 100) / 100;
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4 animate-in fade-in duration-150">
@@ -718,7 +725,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
                         setActivePackageDef(nextDef);
                         const nextPct = nextDef.discountPercentage || 0;
                         setDiscountPercent(nextPct);
-                        setDiscountAmountAED(nextPct ? Math.round((nextDef.priceAED * nextPct) / 100) : 0);
+                        setDiscountAmountAED(nextPct ? Math.round(((nextDef.priceAED * nextPct) / 100) * 100) / 100 : 0);
                         setAppliedPromoCode(nextPct ? 'PACKAGE_DISCOUNT' : '');
                         setPromoInput('');
                         setPromoError('');
@@ -1057,7 +1064,7 @@ Personal training session packages are personal and non-transferable. Package re
                   className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 w-4 h-4 shrink-0"
                 />
                 <span className="leading-snug text-[11px] sm:text-xs">
-                  I have read and agree to the <strong className="text-blue-900">Payment Terms & Conditions</strong> and <strong className="text-blue-900">Refund Policy</strong> (including strict 30-day package expiry and 12-hour cancellation rules).
+                  I have read and agree to the <strong className="text-blue-900">Payment Terms & Conditions</strong> and <strong className="text-blue-900">Refund Policy</strong> (including strict {packageDef.validityDays || 30}-day package expiry and 12-hour cancellation rules).
                 </span>
               </label>
             </div>
@@ -1066,7 +1073,7 @@ Personal training session packages are personal and non-transferable. Package re
             <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-2.5 sm:p-3 space-y-1.5">
               <div className="flex items-center space-x-1.5 text-amber-900 font-bold text-[11px] sm:text-xs">
                 <RefreshCw className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                <span>Automatic Recurring 30-Day Subscription Authorization</span>
+                <span>Automatic Recurring {packageDef.validityDays || 30}-Day Subscription Authorization</span>
               </div>
               <label className="flex items-start space-x-2 cursor-pointer text-[10px] sm:text-[11px] text-slate-700 leading-relaxed">
                 <input
@@ -1076,7 +1083,7 @@ Personal training session packages are personal and non-transferable. Package re
                   className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 w-4 h-4 shrink-0"
                 />
                 <span>
-                  "I authorize Waiter Walk to automatically charge my saved payment card <strong>AED {totalPayableAED}</strong> every 30 days until I cancel my subscription. Package includes <strong>{packageDef.sessionCount}</strong> sessions with strict 30-day expiry."
+                  "I authorize Waiter Walk to automatically charge my saved payment card <strong>AED {totalPayableAED}</strong> every {packageDef.validityDays || 30} days until I cancel my subscription. Package includes <strong>{packageDef.sessionCount}</strong> sessions with strict {packageDef.validityDays || 30}-day expiry."
                 </span>
               </label>
             </div>
