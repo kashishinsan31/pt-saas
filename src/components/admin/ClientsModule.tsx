@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Client, HealthIssueNote } from '../../types';
-import { formatAED, formatReadableDate, calculateExpiryDate, formatDubaiDate } from '../../utils/dubaiTime';
+import { formatAED, formatReadableDate, calculateExpiryDate, formatDubaiDate, formatDubaiTime } from '../../utils/dubaiTime';
 import { HealthDeclarationModal } from '../common/HealthDeclarationModal';
 import { AddHealthIssueModal } from '../common/AddHealthIssueModal';
 import {
@@ -1293,7 +1293,14 @@ export const ClientsModule: React.FC = () => {
                       <div key={p.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center">
                         <div>
                           <div className="font-bold text-slate-900">{p.packageName}</div>
-                          <div className="text-slate-500 text-[11px]">{p.paymentDate} • Method: {p.paymentMethod} • Ref: {p.transactionReference}</div>
+                          <div className="text-slate-500 text-[11px]">
+                            {formatReadableDate(p.paymentDate) || p.paymentDate}
+                            {(() => {
+                              const t = formatDubaiTime((p as any).paidAt || (p as any).failedAt || p.createdAt);
+                              return t ? ` at ${t}` : '';
+                            })()}
+                            {' '}• Method: {p.paymentMethod} • Ref: {p.transactionReference}
+                          </div>
                         </div>
                         <div className="text-right">
                           {currentUser?.role === 'admin' ? (

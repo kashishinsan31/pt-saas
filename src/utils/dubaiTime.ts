@@ -43,6 +43,42 @@ export function formatReadableDate(dateStr: string): string {
 }
 
 /**
+ * Formats an ISO timestamp or Date into readable Dubai time (e.g. "10:58 PM GST").
+ * Returns empty string for bare YYYY-MM-DD strings without a time component.
+ */
+export function formatDubaiTime(dateOrIso?: string | Date): string {
+  if (!dateOrIso) return '';
+  if (typeof dateOrIso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateOrIso.trim())) {
+    return '';
+  }
+  const d = typeof dateOrIso === 'string' ? new Date(dateOrIso) : dateOrIso;
+  if (isNaN(d.getTime())) return '';
+  const formatted = new Intl.DateTimeFormat('en-US', {
+    timeZone: DUBAI_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  }).format(d);
+  return `${formatted} GST`;
+}
+
+/**
+ * Formats an ISO timestamp or Date into readable date & time in Asia/Dubai timezone.
+ */
+export function formatDubaiDateTime(dateOrIso?: string | Date, fallbackDateStr?: string): string {
+  if (dateOrIso) {
+    const timeStr = formatDubaiTime(dateOrIso);
+    const dateStr = formatReadableDate(typeof dateOrIso === 'string' ? dateOrIso : dateOrIso.toISOString());
+    if (dateStr && timeStr) return `${dateStr} • ${timeStr}`;
+    if (dateStr) return `${dateStr} GST`;
+  }
+  if (fallbackDateStr) {
+    return `${formatReadableDate(fallbackDateStr) || fallbackDateStr} GST`;
+  }
+  return '';
+}
+
+/**
  * Calculates package expiry date from a given start date YYYY-MM-DD and validity days
  */
 export function calculateExpiryDate(startDateStr: string, validityDays: number = 30): string {

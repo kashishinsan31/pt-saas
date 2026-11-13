@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { formatReadableDate, formatDubaiDate, canMarkSessionCompleted } from '../../utils/dubaiTime';
+import { formatReadableDate, formatDubaiDate, formatDubaiTime, canMarkSessionCompleted } from '../../utils/dubaiTime';
 import {
   CalendarDays,
   CheckCircle,
@@ -514,7 +514,12 @@ export const TrainerDashboard: React.FC = () => {
                     <div className="font-bold text-blue-900 mt-0.5">{p.packageName}</div>
 
                     <div className="text-slate-500 text-[11px] mt-0.5">
-                      Payment Date: {p.paymentDate} GST • Method: {p.paymentMethod} • Ref: {p.transactionReference}
+                      Payment Date: {formatReadableDate(p.paymentDate) || p.paymentDate}
+                      {(() => {
+                        const t = formatDubaiTime((p as any).paidAt || (p as any).failedAt || p.createdAt);
+                        return t ? ` at ${t}` : ' GST';
+                      })()}
+                      {' '}• Method: {p.paymentMethod} • Ref: {p.transactionReference}
                     </div>
                   </div>
 
@@ -842,7 +847,14 @@ export const TrainerDashboard: React.FC = () => {
                         <div className="flex justify-between items-start">
                           <div>
                             <div className="font-extrabold text-slate-900 text-sm">{p.packageName}</div>
-                            <div className="text-slate-500 text-[11px]">Payment Date: {p.paymentDate} • Method: {p.paymentMethod}</div>
+                            <div className="text-slate-500 text-[11px]">
+                              Payment Date: {formatReadableDate(p.paymentDate) || p.paymentDate}
+                              {(() => {
+                                const t = formatDubaiTime((p as any).paidAt || (p as any).failedAt || p.createdAt);
+                                return t ? ` at ${t}` : '';
+                              })()}
+                              {' '}• Method: {p.paymentMethod}
+                            </div>
                             <div className="text-slate-400 font-mono text-[10px]">Ref: {p.transactionReference}</div>
                           </div>
 

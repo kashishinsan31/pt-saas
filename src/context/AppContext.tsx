@@ -21,7 +21,7 @@ import {
   PromoCode,
   BodyMetricEntry,
 } from '../types';
-import { processStripeApiCharge } from '../services/stripeApi';
+import { processStripeApiCharge, syncStripeChargesDirectly } from '../services/stripeApi';
 import {
   subscribeCollection,
   subscribeDocument,
@@ -90,6 +90,8 @@ interface AppContextType {
   isRefreshingServerData: boolean;
   lastServerSyncTime: string | null;
   refreshDataFromServer: () => Promise<{ success: boolean; message: string }>;
+  syncWithStripe: () => Promise<{ success: boolean; message: string }>;
+  assignPaymentToClient: (paymentId: string, targetClientId: string) => Promise<{ success: boolean; message: string }>;
 
   // Actions
   addSavedCard: (clientId: string, cardData: Omit<SavedCard, 'id' | 'clientId' | 'createdAt'>) => SavedCard;
@@ -162,7 +164,10 @@ interface AppContextType {
   payAndActivatePackage: (
     packageId: string,
     cardDetails: { cardHolder: string; brand: string; last4: string; expiryMonth: string; expiryYear: string; isDefault?: boolean },
-    customStripeChargeId?: string
+    customStripeChargeId?: string,
+    stripeCustomerId?: string,
+    stripeToken?: string,
+    saveCard?: boolean
   ) => { success: boolean; message: string };
 
   // Booking & Session Management
@@ -298,6 +303,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [promoCodes, setPromoCodes] = useState<PromoCode[]>(initialPromoCodes);
   const [testSuiteResults, setTestSuiteResults] = useState<TestResult[]>([]);
 
+  const sortPaymentsNewest = (list: PaymentRecord[]) =>
+    [...list].sort((a, b) => {
+      const tB = new Date(b.createdAt || b.paymentDate || 0).getTime() || 0;
+      const tA = new Date(a.createdAt || a.paymentDate || 0).getTime() || 0;
+      return tB - tA;
+    });
+
+  const sortByTimestampDesc = <T extends { timestamp?: string }>(list: T[]) =>
+    [...list].sort((a, b) => (new Date(b.timestamp || 0).getTime() || 0) - (new Date(a.timestamp || 0).getTime() || 0));
+
+  const sortClientPackagesNewest = (list: ClientPackage[]) =>
+    [...list].sort((a, b) => {
+      const tB = new Date(b.purchasedAt || b.startDate || 0).getTime() || 0;
+      const tA = new Date(a.purchasedAt || a.startDate || 0).getTime() || 0;
+      return tB - tA;
+    });
+
   // Server data refresh state (bypassing local cache)
   const [isRefreshingServerData, setIsRefreshingServerData] = useState(false);
   const [lastServerSyncTime, setLastServerSyncTime] = useState<string | null>(null);
@@ -342,14 +364,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setClients(clientsRes);
       setTrainers(trainersRes);
       if (pkgDefsRes.length > 0) setPackageDefinitions(pkgDefsRes);
-      setClientPackages(clientPkgsRes);
+      setClientPackages(sortClientPackagesNewest(clientPkgsRes));
       setBookings(bookingsRes);
-      setTransactions(txnsRes);
-      setPayments(paymentsRes);
+      setTransactions(sortByTimestampDesc(txnsRes));
+      setPayments(sortPaymentsNewest(paymentsRes));
       setSubscriptions(subsRes);
       setSavedCards(cardsRes);
-      setNotifications(notifsRes);
-      if (auditsRes.length > 0) setAuditLogs(auditsRes);
+      setNotifications(sortByTimestampDesc(notifsRes));
+      if (auditsRes.length > 0) setAuditLogs(sortByTimestampDesc(auditsRes));
       if (slidesRes.length > 0) setSlides(slidesRes);
       if (promosRes.length > 0) setPromoCodes(promosRes);
 
@@ -382,9 +404,82 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Sync live Stripe charges, payment intents, and checkout sessions directly into Firestore, then reload fresh state
+  const syncWithStripe = async (): Promise<{ success: boolean; message: string }> => {
+    setIsRefreshingServerData(true);
+    try {
+      let syncSuccess = false;
+      let syncMessage = '';
+
+      try {
+        const res = await fetch('/api/stripe/sync-charges', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const data = await res.json();
+          if (data && data.success) {
+            syncSuccess = true;
+            syncMessage = data.message || `Synchronized ${data.syncedCount || 0} charges from Stripe.`;
+          }
+        }
+      } catch {
+        // Fallback to direct Stripe client sync below
+      }
+
+      if (!syncSuccess) {
+        const isLive = settings?.stripeMode !== 'test';
+        const activeKey = (
+          isLive
+            ? (settings?.stripeLiveSecretKey || settings?.stripeSecretKey)
+            : (settings?.stripeSecretKey || settings?.stripeLiveSecretKey)
+        )?.trim() || '';
+
+        if (!activeKey) {
+          return {
+            success: false,
+            message: 'Stripe Secret Key is missing in Admin Settings > Stripe Gateway.',
+          };
+        }
+
+        const directRes = await syncStripeChargesDirectly(activeKey);
+        if (!directRes.success) {
+          return { success: false, message: directRes.message };
+        }
+        syncMessage = directRes.message;
+      }
+
+      await refreshDataFromServer();
+      return { success: true, message: syncMessage };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err?.message || 'Error synchronizing with Stripe.',
+      };
+    } finally {
+      setIsRefreshingServerData(false);
+    }
+  };
+
+  // Admin action: Assign an unmatched/pending Stripe payment record to a real Client
+  const assignPaymentToClient = async (paymentId: string, targetClientId: string): Promise<{ success: boolean; message: string }> => {
+    const pay = payments.find((p) => p.id === paymentId);
+    const client = clients.find((c) => c.id === targetClientId);
+    if (!pay || !client) {
+      return { success: false, message: 'Payment record or client not found.' };
+    }
+
+    const updatedNotes = `${pay.notes || ''} • Assigned manually to ${client.fullName} (${client.id})`.trim();
+    setPayments((prev) => prev.map((p) => (p.id === paymentId ? { ...p, clientId: client.id, notes: updatedNotes } : p)));
+    await updateDocument('payments', paymentId, { clientId: client.id, notes: updatedNotes });
+
+    logAudit('ASSIGN_STRIPE_PAYMENT', `Assigned Stripe payment ${paymentId} (AED ${pay.amountPaidAED || pay.amountAED}) to client ${client.fullName} (${client.id}).`);
+    return { success: true, message: `Payment ${paymentId} assigned to ${client.fullName}!` };
+  };
+
   // 1. Initialize Firestore baseline records and real-time onSnapshot listeners
   useEffect(() => {
-    // Seed default records if Firestore collections are unpopulated
     seedCollectionIfEmpty('users', initialUsers);
     seedCollectionIfEmpty('packageDefinitions', initialPackageDefinitions);
     seedCollectionIfEmpty('slides', initialSlides);
@@ -392,7 +487,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     seedCollectionIfEmpty('auditLogs', initialAuditLogs);
     seedSettingsIfEmpty(initialSettings);
 
-    // Real-time Firestore subscriptions for live multi-device syncing
     const unsubUsers = subscribeCollection<User>('users', (items) => {
       if (items.length > 0) setUsers(items);
     });
@@ -406,16 +500,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (items.length > 0) setPackageDefinitions(items);
     });
     const unsubClientPackages = subscribeCollection<ClientPackage>('clientPackages', (items) => {
-      setClientPackages(items);
+      setClientPackages(sortClientPackagesNewest(items));
     });
     const unsubBookings = subscribeCollection<SessionBooking>('bookings', (items) => {
       setBookings(items);
     });
     const unsubTransactions = subscribeCollection<SessionTransaction>('transactions', (items) => {
-      setTransactions(items);
+      setTransactions(sortByTimestampDesc(items));
     });
     const unsubPayments = subscribeCollection<PaymentRecord>('payments', (items) => {
-      setPayments(items);
+      setPayments(sortPaymentsNewest(items));
     });
     const unsubSubscriptions = subscribeCollection<SubscriptionRecord>('subscriptions', (items) => {
       setSubscriptions(items);
@@ -424,10 +518,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSavedCards(items);
     });
     const unsubNotifications = subscribeCollection<NotificationItem>('notifications', (items) => {
-      setNotifications(items);
+      setNotifications(sortByTimestampDesc(items));
     });
     const unsubAuditLogs = subscribeCollection<AuditLogItem>('auditLogs', (items) => {
-      if (items.length > 0) setAuditLogs(items);
+      if (items.length > 0) setAuditLogs(sortByTimestampDesc(items));
     });
     const unsubSlides = subscribeCollection<DashboardSlide>('slides', (items) => {
       if (items.length > 0) setSlides(items);
@@ -463,106 +557,95 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // Automatic 30-Day Package Expiry check engine
+  // Automatic 30-Day Package Expiry check engine (persists status updates directly to Firestore)
+  const processedExpiryIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
+    if (clientPackages.length === 0) return;
     const today = formatDubaiDate(new Date());
 
-    setClientPackages((prevPackages) => {
-      let updated = false;
-      const expiredTxns: SessionTransaction[] = [];
-
-      const nextPackages = prevPackages.map((pkg) => {
-        if (pkg.status === 'Active') {
-          // Check if 30 days elapsed
-          if (pkg.expiryDate < today) {
-            updated = true;
-            const expiredAmount = pkg.remainingSessions;
-
-            // Collect transaction if expired sessions > 0
-            if (expiredAmount > 0) {
-              expiredTxns.push({
-                id: `TXN-EXP-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-                clientId: pkg.clientId,
-                packageId: pkg.id,
-                timestamp: new Date().toISOString(),
-                type: 'AUTOMATIC_EXPIRY_DEDUCTION',
-                creditChange: -expiredAmount,
-                previousBalance: expiredAmount,
-                newBalance: 0,
-                reason: `Package 30-day validity reached (${pkg.expiryDate}). ${expiredAmount} unused session credits expired.`,
-                responsibleUserId: 'SYSTEM_EXPIRY_ENGINE',
-                responsibleRole: 'system',
-              });
-            }
-
-            return {
-              ...pkg,
-              status: 'Expired' as const,
-              expiredSessions: pkg.expiredSessions + expiredAmount,
-              remainingSessions: 0,
-            };
-          }
-
-          // Check if all sessions completed before 30 days
-          if (pkg.remainingSessions === 0 && pkg.totalSessions > 0) {
-            updated = true;
-            return {
-              ...pkg,
-              status: 'Completed' as const,
-            };
-          }
-        }
-        return pkg;
-      });
-
-      // Enforce strictly 1 Active package per client across system state
-      const activeByClient: Record<string, typeof nextPackages> = {};
-      nextPackages.forEach((pkg) => {
-        if (pkg.status === 'Active') {
-          if (!activeByClient[pkg.clientId]) {
-            activeByClient[pkg.clientId] = [];
-          }
-          activeByClient[pkg.clientId].push(pkg);
-        }
-      });
-
-      const finalPackages = nextPackages.map((pkg) => {
-        if (pkg.status === 'Active') {
-          const clientActives = activeByClient[pkg.clientId] || [];
-          if (clientActives.length > 1) {
-            // Sort by purchasedAt or startDate descending (newest first)
-            const sorted = [...clientActives].sort((a, b) => {
-              const tA = new Date(a.purchasedAt || a.startDate).getTime();
-              const tB = new Date(b.purchasedAt || b.startDate).getTime();
-              return tB - tA;
-            });
-            const newestId = sorted[0].id;
-            if (pkg.id !== newestId) {
-              updated = true;
-              return {
-                ...pkg,
-                status: (pkg.remainingSessions === 0 ? 'Completed' : 'Expired') as 'Completed' | 'Expired',
-              };
-            }
-          }
-        }
-        return pkg;
-      });
-
-      if (expiredTxns.length > 0) {
-        setTimeout(() => {
-          setTransactions((txs) => [...expiredTxns, ...txs]);
-        }, 0);
+    const activeByClient: Record<string, ClientPackage[]> = {};
+    clientPackages.forEach((pkg) => {
+      if (pkg.status === 'Active') {
+        if (!activeByClient[pkg.clientId]) activeByClient[pkg.clientId] = [];
+        activeByClient[pkg.clientId].push(pkg);
       }
-
-      if (updated) {
-        setTimeout(() => {
-          logAudit('PACKAGE_EXPIRY_JOB', 'Executed automatic package expiry scanning in Asia/Dubai timezone.');
-        }, 0);
-      }
-      return finalPackages;
     });
-  }, []);
+
+    const staleUpdates: { id: string; status: 'Expired' | 'Completed'; expiredSessions?: number; remainingSessions?: number; clientId: string; pkg: ClientPackage }[] = [];
+
+    clientPackages.forEach((pkg) => {
+      if (pkg.status !== 'Active' || processedExpiryIdsRef.current.has(pkg.id)) return;
+
+      if (pkg.expiryDate < today) {
+        const expiredAmount = pkg.remainingSessions || 0;
+        staleUpdates.push({
+          id: pkg.id,
+          status: 'Expired',
+          expiredSessions: (pkg.expiredSessions || 0) + expiredAmount,
+          remainingSessions: 0,
+          clientId: pkg.clientId,
+          pkg,
+        });
+        return;
+      }
+
+      if (pkg.remainingSessions === 0 && pkg.totalSessions > 0) {
+        staleUpdates.push({
+          id: pkg.id,
+          status: 'Completed',
+          clientId: pkg.clientId,
+          pkg,
+        });
+        return;
+      }
+
+      const clientActives = activeByClient[pkg.clientId] || [];
+      if (clientActives.length > 1) {
+        const sorted = [...clientActives].sort((a, b) => {
+          const tA = new Date(a.purchasedAt || a.startDate).getTime();
+          const tB = new Date(b.purchasedAt || b.startDate).getTime();
+          return tB - tA;
+        });
+        if (pkg.id !== sorted[0].id) {
+          staleUpdates.push({
+            id: pkg.id,
+            status: pkg.remainingSessions === 0 ? 'Completed' : 'Expired',
+            clientId: pkg.clientId,
+            pkg,
+          });
+        }
+      }
+    });
+
+    if (staleUpdates.length === 0) return;
+
+    staleUpdates.forEach((upd) => {
+      processedExpiryIdsRef.current.add(upd.id);
+      const patch: Partial<ClientPackage> = { status: upd.status };
+      if (upd.expiredSessions !== undefined) patch.expiredSessions = upd.expiredSessions;
+      if (upd.remainingSessions !== undefined) patch.remainingSessions = upd.remainingSessions;
+      updateDocument('clientPackages', upd.id, patch);
+
+      if (upd.status === 'Expired' && upd.pkg.remainingSessions > 0) {
+        const expTxn: SessionTransaction = {
+          id: `TXN-EXP-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          clientId: upd.clientId,
+          packageId: upd.id,
+          timestamp: new Date().toISOString(),
+          type: 'AUTOMATIC_EXPIRY_DEDUCTION',
+          creditChange: -upd.pkg.remainingSessions,
+          previousBalance: upd.pkg.remainingSessions,
+          newBalance: 0,
+          reason: `Package 30-day validity reached (${upd.pkg.expiryDate}). ${upd.pkg.remainingSessions} unused session credits expired.`,
+          responsibleUserId: 'SYSTEM_EXPIRY_ENGINE',
+          responsibleRole: 'system',
+        };
+        setDocument('transactions', expTxn.id, expTxn);
+      }
+    });
+
+    logAudit('PACKAGE_EXPIRY_JOB', `Persisted ${staleUpdates.length} automatic package expiry/completion update(s) in Asia/Dubai timezone.`);
+  }, [clientPackages]);
 
   // Automatic 3-Day Expiry & 2-Hour WhatsApp Session Reminder scanner engine
   useEffect(() => {
@@ -657,6 +740,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addSavedCard = (clientId: string, cardData: Omit<SavedCard, 'id' | 'clientId' | 'createdAt'>): SavedCard => {
+    const existingDuplicate = savedCards.find(
+      (c) =>
+        c.clientId === clientId &&
+        c.last4 === cardData.last4 &&
+        String(c.expiryMonth) === String(cardData.expiryMonth) &&
+        String(c.expiryYear) === String(cardData.expiryYear)
+    );
+
+    if (existingDuplicate) {
+      const mergedCard: SavedCard = {
+        ...existingDuplicate,
+        ...cardData,
+        stripeCustomerId: cardData.stripeCustomerId || existingDuplicate.stripeCustomerId,
+        stripeToken: cardData.stripeToken || existingDuplicate.stripeToken,
+        isDefault: cardData.isDefault ?? existingDuplicate.isDefault,
+      };
+
+      setSavedCards((prev) =>
+        prev.map((c) => {
+          if (c.id === mergedCard.id) return mergedCard;
+          if (mergedCard.isDefault && c.clientId === clientId) {
+            updateDocument('savedCards', c.id, { isDefault: false });
+            return { ...c, isDefault: false };
+          }
+          return c;
+        })
+      );
+
+      setDocument('savedCards', mergedCard.id, mergedCard);
+      return mergedCard;
+    }
+
     const newCard: SavedCard = {
       ...cardData,
       id: `CARD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -737,8 +852,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const pkgDef = packageDefinitions.find((p) => p.id === targetDefId);
     const client = clients.find((c) => c.id === clientId);
 
-    // EXACT same amount paid earlier
-    const targetAmountAED = earlierPkg?.packagePriceAED || clientSub?.amountAED || pkgDef?.priceAED || 1200;
+    // EXACT same amount paid earlier - accurately separating base price from 5% UAE VAT
+    const targetTotalAmountAED = earlierPkg?.packagePriceAED || clientSub?.amountAED || (pkgDef ? Math.round(pkgDef.priceAED * 1.05 * 100) / 100 : 1260);
+    const targetBaseAmountAED = earlierPkg?.basePriceAED !== undefined ? earlierPkg.basePriceAED : Math.round((targetTotalAmountAED / 1.05) * 100) / 100;
+    const targetVatAmountAED = Math.round((targetTotalAmountAED - targetBaseAmountAED) * 100) / 100;
 
     // EXACT same package name
     const targetPackageName = earlierPkg?.packageName || clientSub?.packageName || pkgDef?.name || 'Personal Training Package';
@@ -776,8 +893,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const customerId = defaultCard?.stripeCustomerId || client?.stripeCustomerId || clientSub?.stripeCustomerId;
       const stripeRes = await processStripeApiCharge({
         secretKey: activeSecretKey,
-        amountAED: targetAmountAED,
-        description: `Auto-Pay Recurring Renewal: ${targetPackageName} for ${client.fullName} (AED ${targetAmountAED}) - Waiter Walk Dubai`,
+        amountAED: targetTotalAmountAED,
+        description: `Auto-Pay Recurring Renewal: ${targetPackageName} for ${client.fullName} (AED ${targetTotalAmountAED}) - Waiter Walk Dubai`,
         statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
         receiptEmail: client.email,
         customerId: customerId || undefined,
@@ -791,20 +908,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // Record failed auto-pay attempt for audit and dashboard visibility
         const failedPayRef = `PAY-FAIL-${Math.floor(7000 + Math.random() * 9000)}`;
         const startDate = formatDubaiDate(new Date());
-        const basePrice = targetAmountAED;
-        const vatAmt = Math.round(basePrice * 0.05 * 100) / 100;
-        const totalAmt = basePrice + vatAmt;
 
         const failedPayment: PaymentRecord = {
           id: failedPayRef,
           clientId,
           packageId: `PKG-FAILED-${Date.now()}`,
           packageName: `${targetPackageName} (Auto-Pay Renewal)`,
-          baseAmountAED: basePrice,
-          vatAmountAED: vatAmt,
-          amountAED: totalAmt,
+          baseAmountAED: targetBaseAmountAED,
+          vatAmountAED: targetVatAmountAED,
+          amountAED: targetTotalAmountAED,
           amountPaidAED: 0,
-          outstandingBalanceAED: totalAmt,
+          outstandingBalanceAED: targetTotalAmountAED,
           paymentDate: startDate,
           paymentMethod: 'Stripe',
           transactionReference: stripeRes.stripeChargeId || 'ERR_CARD_DECLINED',
@@ -821,7 +935,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           id: notifId,
           userId: 'admin-all',
           title: `Auto-Pay Failed: ${client.fullName}`,
-          message: `Automatic renewal charge of AED ${totalAmt} for ${client.fullName} failed: ${stripeRes.message}.`,
+          message: `Automatic renewal charge of AED ${targetTotalAmountAED} for ${client.fullName} failed: ${stripeRes.message}.`,
           type: 'payment',
           read: false,
           timestamp: new Date().toISOString(),
@@ -829,9 +943,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setNotifications((prev) => [adminNotif, ...prev]);
         setDocument('notifications', notifId, adminNotif);
 
-        // Update subscription status to 'Payment Failed'
+        // Update subscription status to 'Payment Failed' and persist to Firestore
         setSubscriptions((subs) =>
-          subs.map((s) => (s.clientId === clientId && s.status === 'Active' ? { ...s, status: 'Payment Failed' as const } : s))
+          subs.map((s) => {
+            if (s.clientId === clientId && s.status === 'Active') {
+              updateDocument('subscriptions', s.id, { status: 'Payment Failed' as const });
+              return { ...s, status: 'Payment Failed' as const };
+            }
+            return s;
+          })
         );
 
         logAudit('AUTO_PAY_FAILED', `Auto-pay charge failed for client ${client.fullName}: ${stripeRes.message}`);
@@ -853,8 +973,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       { brand: defaultCard.brand, last4: defaultCard.last4 },
       true,
       realChargeId,
-      undefined,
-      targetAmountAED,
+      {
+        baseAmountAED: targetBaseAmountAED,
+        vatAmountAED: targetVatAmountAED,
+        totalAmountAED: targetTotalAmountAED,
+      } as any,
+      targetBaseAmountAED,
       targetValidityDays,
       targetPackageName,
       targetSessionCount,
@@ -864,7 +988,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (res.success) {
       logAudit(
         'AUTO_DEDUCTION_RENEWAL',
-        `Renewed earlier package "${targetPackageName}" with exact earlier amount AED ${targetAmountAED} (${targetSessionCount} credits, ${targetValidityDays}-day validity) for client ${client?.fullName || clientId}. Charged saved card ${defaultCard.brand} (ending in ${defaultCard.last4}).${stripeNotice}`
+        `Renewed earlier package "${targetPackageName}" with exact earlier amount AED ${targetTotalAmountAED} (${targetSessionCount} credits, ${targetValidityDays}-day validity) for client ${client?.fullName || clientId}. Charged saved card ${defaultCard.brand} (ending in ${defaultCard.last4}).${stripeNotice}`
       );
     }
 
@@ -912,14 +1036,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           continue;
         }
 
-        // Trigger conditions:
-        // 1. Active package validity has reached or passed today (clientActivePkg.expiryDate <= todayStr)
-        // 2. Active package session credits depleted (clientActivePkg.remainingSessions <= 0)
-        // 3. Subscription nextPaymentDate <= todayStr
-        // 4. No active package exists (previous package already expired)
+        // Trigger conditions match triggerAutoDeductionRenewal safeguard cleanly:
         const isPkgExpired = clientActivePkg ? clientActivePkg.expiryDate <= todayStr : true;
         const isPkgDepleted = clientActivePkg ? clientActivePkg.remainingSessions <= 0 : true;
-        const isSubDue = sub.nextPaymentDate <= todayStr;
+        const isSubDue = !clientActivePkg && sub.nextPaymentDate <= todayStr;
 
         if (isPkgExpired || isPkgDepleted || isSubDue) {
           const res = await triggerAutoDeductionRenewal(sub.clientId, sub.packageDefinitionId);
@@ -1333,7 +1453,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Create subscription record if recurring (Strictly 1 Active Subscription per Client Account)
     if (isRecurring && subRef) {
       const defaultSavedCard = savedCards.find((c) => c.clientId === clientId && c.isDefault) || savedCards.find((c) => c.clientId === clientId);
-      const effectiveCustomerId = stripeCustomerId || client.stripeCustomerId || defaultSavedCard?.stripeCustomerId || `cus_${clientId}`;
+      const candidateCustomerId = stripeCustomerId || client.stripeCustomerId || defaultSavedCard?.stripeCustomerId;
+      const effectiveCustomerId = candidateCustomerId && candidateCustomerId.startsWith('cus_') && candidateCustomerId !== `cus_${clientId}`
+        ? candidateCustomerId
+        : '';
 
       setSubscriptions((prev) => {
         // Cancel all existing active/pending subscriptions for this specific client
@@ -1350,7 +1473,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           clientId,
           packageDefinitionId: pkgDef.id,
           packageName: effectivePackageName,
-          amountAED: basePrice,
+          amountAED: totalAmount,
           cardBrand: cardDetails?.brand || 'Visa',
           last4Digits: cardDetails?.last4 || '••••',
           startDate,
@@ -1367,11 +1490,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return [newSub, ...updated];
       });
 
-      if (effectiveCustomerId && (!client.stripeCustomerId || client.stripeCustomerId !== effectiveCustomerId)) {
+      if (effectiveCustomerId && client.stripeCustomerId !== effectiveCustomerId) {
         setClients((prev) => prev.map((c) => (c.id === clientId ? { ...c, stripeCustomerId: effectiveCustomerId } : c)));
         updateDocument('clients', clientId, { stripeCustomerId: effectiveCustomerId });
       }
     }
+
+    // Update client activePackageId and sessionCreditsRemaining in Firestore & state
+    setClients((prev) =>
+      prev.map((c) => (c.id === clientId ? { ...c, activePackageId: pkgId, sessionCreditsRemaining: effectiveSessionCount } : c))
+    );
+    updateDocument('clients', clientId, {
+      activePackageId: pkgId,
+      sessionCreditsRemaining: effectiveSessionCount,
+    });
 
     // Allocate EXACTLY the purchased session count
     const newClientPackage: ClientPackage = {
@@ -1776,7 +1908,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const payAndActivatePackage = (
     packageId: string,
     cardDetails: { cardHolder: string; brand: string; last4: string; expiryMonth: string; expiryYear: string; isDefault?: boolean },
-    customStripeChargeId?: string
+    customStripeChargeId?: string,
+    stripeCustomerId?: string,
+    stripeToken?: string,
+    saveCard = true
   ) => {
     const pkg = clientPackages.find((p) => p.id === packageId);
     if (!pkg) {
@@ -1792,66 +1927,134 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const startDate = formatDubaiDate(new Date());
     const expiryDate = calculateExpiryDate(startDate, pkgDef?.validityDays || 30);
 
-    // Save Card to Client Saved Cards if not already present
-    addSavedCard(client.id, {
-      cardHolder: cardDetails.cardHolder || client.fullName,
-      brand: cardDetails.brand || 'Visa',
-      last4: cardDetails.last4 || '••••',
-      expiryMonth: cardDetails.expiryMonth || '12',
-      expiryYear: cardDetails.expiryYear || '28',
-      isDefault: cardDetails.isDefault ?? true,
-    });
+    const existingCard = savedCards.find(
+      (c) =>
+        c.clientId === client.id &&
+        c.last4 === cardDetails.last4 &&
+        String(c.expiryMonth) === String(cardDetails.expiryMonth) &&
+        String(c.expiryYear) === String(cardDetails.expiryYear)
+    );
+    const resolvedCustomerId =
+      stripeCustomerId ||
+      existingCard?.stripeCustomerId ||
+      (client.stripeCustomerId && !client.stripeCustomerId.startsWith(`cus_${client.id}`) ? client.stripeCustomerId : '') ||
+      '';
 
-    // Update Payment Record
-    setPayments((prev) =>
-      prev.map((p) => {
-        if (p.packageId === packageId || p.id === pkg.paymentReference) {
+    // Save or merge card only when requested (prevents tokenless duplicates)
+    if (saveCard) {
+      addSavedCard(client.id, {
+        cardHolder: cardDetails.cardHolder || client.fullName,
+        brand: cardDetails.brand || 'Visa',
+        last4: cardDetails.last4 || '••••',
+        expiryMonth: cardDetails.expiryMonth || '12',
+        expiryYear: cardDetails.expiryYear || '28',
+        isDefault: cardDetails.isDefault ?? true,
+        ...(resolvedCustomerId ? { stripeCustomerId: resolvedCustomerId } : {}),
+        ...(stripeToken || existingCard?.stripeToken ? { stripeToken: stripeToken || existingCard?.stripeToken } : {}),
+      });
+    }
+
+    // Update or create Payment Record (prepend newest-first)
+    const txReference = customStripeChargeId || `tx_card_${Date.now()}_${cardDetails.last4}`;
+    let updatedExistingPayment = false;
+    setPayments((prev) => {
+      const next = prev.map((p) => {
+        if (p.packageId === packageId || (pkg.paymentReference && p.id === pkg.paymentReference)) {
+          updatedExistingPayment = true;
           const updatedPay: PaymentRecord = {
             ...p,
             status: 'Paid',
+            paymentMethod: 'Stripe',
             amountPaidAED: p.amountAED,
             outstandingBalanceAED: 0,
             paymentDate: startDate,
-            transactionReference: customStripeChargeId || `tx_card_${Date.now()}_${cardDetails.last4}`,
+            transactionReference: txReference,
+            stripePaymentIntentId: customStripeChargeId || txReference,
+            createdAt: new Date().toISOString(),
           };
           setDocument('payments', p.id, updatedPay);
           return updatedPay;
         }
         return p;
-      })
-    );
+      });
+      if (!updatedExistingPayment) {
+        const payId = pkg.paymentReference || `PAY-${Math.floor(7000 + Math.random() * 9000)}`;
+        const baseAmt = pkg.basePriceAED || Math.round((pkg.packagePriceAED / 1.05) * 100) / 100;
+        const vatAmt = pkg.vatAmountAED ?? Math.round((pkg.packagePriceAED - baseAmt) * 100) / 100;
+        const createdPay: PaymentRecord = {
+          id: payId,
+          clientId: client.id,
+          packageId,
+          packageName: pkg.packageName,
+          baseAmountAED: baseAmt,
+          vatAmountAED: vatAmt,
+          amountAED: pkg.packagePriceAED,
+          amountPaidAED: pkg.packagePriceAED,
+          outstandingBalanceAED: 0,
+          paymentDate: startDate,
+          paymentMethod: 'Stripe',
+          transactionReference: txReference,
+          stripePaymentIntentId: customStripeChargeId || txReference,
+          status: 'Paid',
+          createdAt: new Date().toISOString(),
+        };
+        setDocument('payments', createdPay.id, createdPay);
+        return sortPaymentsNewest([createdPay, ...next]);
+      }
+      return sortPaymentsNewest(next);
+    });
 
     // Update Client Package to Active and set remaining sessions to totalSessions
     setClientPackages((prev) =>
-      prev.map((p) => {
-        if (p.id === packageId) {
-          const updatedPkg: ClientPackage = {
-            ...p,
-            status: 'Active',
-            startDate,
-            expiryDate,
-            remainingSessions: p.totalSessions,
-          };
-          setDocument('clientPackages', p.id, updatedPkg);
-          return updatedPkg;
-        }
-        // Enforce strictly 1 Active package per client
-        if (p.clientId === pkg.clientId && p.status === 'Active') {
-          const supersededStatus = (p.remainingSessions === 0 ? 'Completed' : 'Expired') as 'Completed' | 'Expired';
-          updateDocument('clientPackages', p.id, { status: supersededStatus });
-          return {
-            ...p,
-            status: supersededStatus,
-          };
-        }
-        return p;
-      })
+      sortClientPackagesNewest(
+        prev.map((p) => {
+          if (p.id === packageId) {
+            const updatedPkg: ClientPackage = {
+              ...p,
+              status: 'Active',
+              startDate,
+              expiryDate,
+              remainingSessions: p.totalSessions,
+              purchasedAt: new Date().toISOString(),
+            };
+            setDocument('clientPackages', p.id, updatedPkg);
+            return updatedPkg;
+          }
+          // Enforce strictly 1 Active package per client
+          if (p.clientId === pkg.clientId && p.status === 'Active') {
+            const supersededStatus = (p.remainingSessions === 0 ? 'Completed' : 'Expired') as 'Completed' | 'Expired';
+            updateDocument('clientPackages', p.id, { status: supersededStatus });
+            return {
+              ...p,
+              status: supersededStatus,
+            };
+          }
+          return p;
+        })
+      )
     );
 
-    // Create or update subscription record for automatic 30-day auto-pay deductions
+    // Update Client record with activePackageId, sessionCreditsRemaining, and vaulted Stripe Customer ID
+    const clientPatch: Partial<Client> = {
+      activePackageId: pkg.id,
+      sessionCreditsRemaining: pkg.totalSessions,
+    };
+    if (resolvedCustomerId && client.stripeCustomerId !== resolvedCustomerId) {
+      clientPatch.stripeCustomerId = resolvedCustomerId;
+    }
+    setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, ...clientPatch } : c)));
+    updateDocument('clients', client.id, clientPatch);
+
+    // Create or update subscription record for automatic 30-day auto-pay deductions (cancel older ones in Firestore too)
     if (cardDetails.isDefault ?? true) {
       setSubscriptions((prev) => {
-        const otherSubs = prev.filter((s) => s.clientId !== client.id);
+        const updatedSubs = prev.map((s) => {
+          if (s.clientId === client.id && (s.status === 'Active' || s.status === 'Pending')) {
+            updateDocument('subscriptions', s.id, { status: 'Cancelled' as const });
+            return { ...s, status: 'Cancelled' as const };
+          }
+          return s;
+        });
         const newSub: SubscriptionRecord = {
           id: `SUB-${Math.floor(4000 + Math.random() * 9000)}`,
           clientId: client.id,
@@ -1864,13 +2067,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           nextPaymentDate: expiryDate,
           lastPaymentDate: startDate,
           status: 'Active',
-          stripeCustomerId: client.stripeCustomerId || `cus_${client.id}`,
+          stripeCustomerId: resolvedCustomerId,
           stripeSubscriptionId: `sub_stripe_${Date.now()}`,
           authorizationConsentGiven: true,
           createdAt: new Date().toISOString(),
         };
         setDocument('subscriptions', newSub.id, newSub);
-        return [newSub, ...otherSubs];
+        return [newSub, ...updatedSubs];
       });
     }
 
@@ -1884,7 +2087,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       creditChange: pkg.totalSessions,
       previousBalance: 0,
       newBalance: pkg.totalSessions,
-      reason: `Client payment collected via saved ${cardDetails.brand} ending in ${cardDetails.last4}. Plan activated with 30-day validity until ${expiryDate}.`,
+      reason: `Client payment collected via ${cardDetails.brand} ending in ${cardDetails.last4}. Plan activated with 30-day validity until ${expiryDate}.`,
       responsibleUserId: currentUser?.id || client.id,
       responsibleRole: currentUser?.role || 'client',
     };
@@ -3360,6 +3563,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isRefreshingServerData,
         lastServerSyncTime,
         refreshDataFromServer,
+        syncWithStripe,
+        assignPaymentToClient,
         purchasePackage,
         createDuePackage,
         switchClientPackage,

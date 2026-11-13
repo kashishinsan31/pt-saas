@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
-import { formatAED, formatReadableDate, getDaysRemaining, evaluateCancellationPolicy, formatDubaiDate } from '../../utils/dubaiTime';
+import { formatAED, formatReadableDate, getDaysRemaining, evaluateCancellationPolicy, formatDubaiDate, formatDubaiTime } from '../../utils/dubaiTime';
 import { exportToPDFPrint } from '../../utils/exportUtils';
 import {
   User,
@@ -43,7 +43,8 @@ import {
   ListChecks,
 } from 'lucide-react';
 import { StripeCheckoutModal } from '../stripe/StripeCheckoutModal';
-import { processStripeApiCharge, getStripe, createStripeCustomer } from '../../services/stripeApi';
+import { processStripeApiCharge, getStripe, createStripeCustomer, attachCardTokenToCustomer } from '../../services/stripeApi';
+import { setDocument, updateDocument } from '../../services/firestoreService';
 import { DashboardSlider } from '../common/DashboardSlider';
 import { HealthDeclarationModal } from '../common/HealthDeclarationModal';
 import { AddHealthIssueModal } from '../common/AddHealthIssueModal';
@@ -212,6 +213,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
     createBooking,
     payAndActivatePackage,
     submitSessionReview,
+    syncWithStripe,
   } = useApp();
 
   const clientId = currentUser?.associatedId || 'WW-CL-1001';
@@ -234,16 +236,20 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
 
   const client =
     clients.find((c) => c.id === clientId) ||
-    clients.find((c) => c.email.toLowerCase() === (currentUser?.email || '').toLowerCase()) ||
+    clients.find((c) => c.email && currentUser?.email && c.email.toLowerCase() === currentUser.email.toLowerCase()) ||
     clients[0] ||
     fallbackClient;
 
+  const activeClientId = client?.id || clientId;
   const trainer = trainers.find((t) => t.id === client?.assignedTrainerId) || trainers[0];
 
   const [activeTab, setActiveTab] = useState<'overview' | 'progress' | 'upcoming' | 'sessions' | 'payments' | 'subscriptions' | 'health'>('overview');
   const [isHealthModalOpen, setIsHealthModalOpen] = useState(false);
   const [isAddIssueModalOpen, setIsAddIssueModalOpen] = useState(false);
   const [isLogMetricModalOpen, setIsLogMetricModalOpen] = useState(false);
+  const [isReloadingStripe, setIsReloadingStripe] = useState(false);
+  const [stripeReloadMsg, setStripeReloadMsg] = useState<{ success: boolean; message: string } | null>(null);
+  const [showSupersededPayments, setShowSupersededPayments] = useState(false);
 
   // Upcoming Features Roadmap state
   const [notifiedFeatures, setNotifiedFeatures] = useState<string[]>([]);
@@ -269,17 +275,34 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
     else setActiveTab('overview');
   }, [initialSection]);
 
-  const activePackage = clientPackages.find((p) => p.clientId === clientId && p.status === 'Active');
+  const activePackage = clientPackages.find((p) => p.clientId === activeClientId && p.status === 'Active');
   const daysRemaining = activePackage ? getDaysRemaining(activePackage.expiryDate) : 0;
 
-  const clientBookings = bookings.filter((b) => b.clientId === clientId);
+  const clientBookings = bookings.filter((b) => b.clientId === activeClientId);
   const upcomingBookings = clientBookings.filter((b) => b.status === 'Scheduled');
   const pastBookings = clientBookings.filter((b) => b.status !== 'Scheduled');
 
-  const clientPayments = payments.filter((p) => p.clientId === clientId);
-  const clientSavedCards = savedCards.filter((c) => c.clientId === clientId);
-  const pendingPackages = clientPackages.filter((p) => p.clientId === clientId && p.status === 'Pending Payment');
-  const activeSubscription = subscriptions.find((s) => s.clientId === clientId && s.status === 'Active');
+  const clientPayments = [...payments]
+    .filter((p) => p.clientId === activeClientId)
+    .sort((a, b) => {
+      const tB = new Date(b.createdAt || b.paymentDate || 0).getTime() || 0;
+      const tA = new Date(a.createdAt || a.paymentDate || 0).getTime() || 0;
+      return tB - tA;
+    });
+  const clientSavedCards = savedCards.filter((c) => c.clientId === activeClientId);
+  const pendingPackages = clientPackages.filter((p) => p.clientId === activeClientId && p.status === 'Pending Payment');
+  const activeSubscription = subscriptions.find((s) => s.clientId === activeClientId && s.status === 'Active');
+
+  const handleClientReloadStripe = async () => {
+    setIsReloadingStripe(true);
+    setStripeReloadMsg(null);
+    try {
+      const res = await syncWithStripe();
+      setStripeReloadMsg(res);
+    } finally {
+      setIsReloadingStripe(false);
+    }
+  };
 
   // Pending Package Payment Modal State
   const [isPayPendingModalOpen, setIsPayPendingModalOpen] = useState(false);
@@ -464,7 +487,51 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
     setPayFeedbackMsg('');
 
     const pkgDef = packageDefinitions.find((p) => p.id === selectedPendingPkg.packageDefinitionId);
-    const pkgAmountAED = selectedPendingPkg.priceAED || pkgDef?.priceAED || 3500;
+    const pkgAmountAED = Number(
+      selectedPendingPkg.packagePriceAED ??
+      selectedPendingPkg.priceAED ??
+      (pkgDef ? Math.round(pkgDef.priceAED * 1.05 * 100) / 100 : 0)
+    );
+
+    const isValidStripeCust = (id?: string) => Boolean(id && id.startsWith('cus_') && id !== `cus_${client.id}`);
+
+    const recordFailedAttempt = (message: string, chargeId?: string, paymentIntentId?: string) => {
+      try {
+        const failPayId = `PAY-FAIL-${Date.now()}`;
+        const baseAmt = Math.round((pkgAmountAED / 1.05) * 100) / 100;
+        const vatAmt = Math.round((pkgAmountAED - baseAmt) * 100) / 100;
+        setDocument('payments', failPayId, {
+          id: failPayId,
+          clientId: activeClientId,
+          packageId: selectedPendingPkg.id,
+          packageName: selectedPendingPkg.packageName || pkgDef?.name || 'Personal Training Package',
+          baseAmountAED: baseAmt,
+          vatAmountAED: vatAmt,
+          amountAED: pkgAmountAED,
+          amountPaidAED: 0,
+          outstandingBalanceAED: pkgAmountAED,
+          paymentDate: formatDubaiDate(new Date()),
+          paymentMethod: 'Stripe',
+          transactionReference: chargeId || `ERR-${Date.now()}`,
+          stripePaymentIntentId: paymentIntentId || chargeId || `ERR-${Date.now()}`,
+          status: 'Failed',
+          notes: `Stripe Card Declined: ${message}`,
+          createdAt: new Date().toISOString(),
+        });
+        const notifId = `NOTIF-${Date.now()}-FAIL`;
+        setDocument('notifications', notifId, {
+          id: notifId,
+          userId: 'admin-all',
+          title: `Payment Declined: ${client.fullName}`,
+          message: `Pending invoice charge of AED ${pkgAmountAED} for ${client.fullName} failed: ${message}.`,
+          type: 'payment',
+          read: false,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.warn('Could not record failed pending payment to Firestore:', err);
+      }
+    };
 
     // 1. If paying with a Selected Saved Card (PCI Vaulted)
     if (selectedPendingSavedCardId !== 'NEW_CARD') {
@@ -475,7 +542,9 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
         return;
       }
 
-      let customerIdToVault = sc.stripeCustomerId || client.stripeCustomerId;
+      let customerIdToVault =
+        (isValidStripeCust(sc.stripeCustomerId) ? sc.stripeCustomerId : undefined) ||
+        (isValidStripeCust(client.stripeCustomerId) ? client.stripeCustomerId : undefined);
       const cardTokenToUse = sc.stripeToken;
 
       if (!customerIdToVault && cardTokenToUse && activeSecretKey) {
@@ -485,10 +554,12 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
             email: client.email,
             name: client.fullName,
             cardToken: cardTokenToUse,
-            clientId: client.id,
+            clientId: activeClientId,
           });
           if (custRes.success && custRes.customerId) {
             customerIdToVault = custRes.customerId;
+            updateDocument('savedCards', sc.id, { stripeCustomerId: custRes.customerId });
+            updateDocument('clients', activeClientId, { stripeCustomerId: custRes.customerId });
           }
         } catch (e) {
           console.warn('Customer vault notice:', e);
@@ -498,7 +569,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
       const stripeRes = await processStripeApiCharge({
         secretKey: activeSecretKey,
         amountAED: pkgAmountAED,
-        description: `Pending Package Payment: ${selectedPendingPkg.name || pkgDef?.name || 'PT Package'} for ${client.fullName} (Saved Card ${sc.brand} ending in ${sc.last4}) - Waiter Walk Dubai`,
+        description: `Pending Package Payment: ${selectedPendingPkg.packageName || pkgDef?.name || 'PT Package'} for ${client.fullName} (Saved Card ${sc.brand} ending in ${sc.last4}) - Waiter Walk Dubai`,
         statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
         receiptEmail: client.email,
         customerId: customerIdToVault || undefined,
@@ -508,6 +579,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
       if (!stripeRes.success) {
         setIsProcessingPay(false);
         setPayFeedbackMsg(`Stripe Gateway Error: ${stripeRes.message}`);
+        recordFailedAttempt(stripeRes.message, stripeRes.stripeChargeId, stripeRes.stripePaymentIntentId);
         return;
       }
 
@@ -521,7 +593,10 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
           expiryYear: sc.expiryYear,
           isDefault: paySaveDefaultCard,
         },
-        stripeRes.stripeChargeId
+        stripeRes.stripeChargeId,
+        customerIdToVault,
+        sc.stripeToken,
+        true
       );
 
       setIsProcessingPay(false);
@@ -583,19 +658,36 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
       const expM = String(c?.exp_month || '12');
       const expY = String(c?.exp_year || '2028');
 
-      // Vault card to Stripe Customer if requested
-      let customerIdToVault = client.stripeCustomerId;
-      if (activeSecretKey && (paySaveDefaultCard || true)) {
+      // Vault card to Stripe Customer (attach to valid existing customer or create new one)
+      let customerIdToVault = isValidStripeCust(client.stripeCustomerId) ? client.stripeCustomerId : undefined;
+      let attachedSourceId: string | undefined;
+      if (activeSecretKey && paySaveDefaultCard) {
         try {
-          const custRes = await createStripeCustomer({
-            secretKey: activeSecretKey,
-            email: client.email,
-            name: client.fullName,
-            cardToken,
-            clientId: client.id,
-          });
-          if (custRes.success && custRes.customerId) {
-            customerIdToVault = custRes.customerId;
+          if (customerIdToVault) {
+            const attachRes = await attachCardTokenToCustomer({
+              secretKey: activeSecretKey,
+              customerId: customerIdToVault,
+              cardToken,
+            });
+            if (attachRes.success && attachRes.sourceId) {
+              attachedSourceId = attachRes.sourceId;
+            } else {
+              customerIdToVault = undefined;
+            }
+          }
+
+          if (!customerIdToVault) {
+            const custRes = await createStripeCustomer({
+              secretKey: activeSecretKey,
+              email: client.email,
+              name: client.fullName,
+              cardToken,
+              clientId: activeClientId,
+            });
+            if (custRes.success && custRes.customerId) {
+              customerIdToVault = custRes.customerId;
+              updateDocument('clients', activeClientId, { stripeCustomerId: custRes.customerId });
+            }
           }
         } catch (e) {
           console.warn('Customer vault notice:', e);
@@ -605,43 +697,34 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
       const stripeRes = await processStripeApiCharge({
         secretKey: activeSecretKey,
         amountAED: pkgAmountAED,
-        description: `Pending Package Payment: ${selectedPendingPkg.name || pkgDef?.name || 'PT Package'} for ${client.fullName} - Waiter Walk Dubai`,
+        description: `Pending Package Payment: ${selectedPendingPkg.packageName || pkgDef?.name || 'PT Package'} for ${client.fullName} - Waiter Walk Dubai`,
         statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
         receiptEmail: client.email,
         customerId: customerIdToVault || undefined,
-        cardToken: customerIdToVault ? undefined : cardToken,
+        cardToken: customerIdToVault ? attachedSourceId : cardToken,
       });
 
       if (!stripeRes.success) {
         setIsProcessingPay(false);
         setPayFeedbackMsg(`Stripe Gateway Error: ${stripeRes.message}`);
+        recordFailedAttempt(stripeRes.message, stripeRes.stripeChargeId, stripeRes.stripePaymentIntentId);
         return;
-      }
-
-      if (paySaveDefaultCard) {
-        addSavedCard(client.id, {
-          cardHolder: payCardHolder || client.fullName,
-          brand,
-          last4: last4Digits,
-          expiryMonth: expM,
-          expiryYear: expY,
-          isDefault: true,
-          stripeCustomerId: customerIdToVault,
-          stripeToken: cardToken,
-        });
       }
 
       const res = payAndActivatePackage(
         selectedPendingPkg.id,
         {
-          cardHolder: payCardHolder,
+          cardHolder: payCardHolder || client.fullName,
           brand,
           last4: last4Digits,
           expiryMonth: expM,
           expiryYear: expY,
           isDefault: paySaveDefaultCard,
         },
-        stripeRes.stripeChargeId
+        stripeRes.stripeChargeId,
+        customerIdToVault,
+        cardToken,
+        paySaveDefaultCard
       );
 
       setIsProcessingPay(false);
@@ -773,29 +856,44 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
       const expY = String(c?.exp_year || '2028');
 
       // Vault card to Stripe Customer if activeSecretKey is available
-      let customerIdToVault = client.stripeCustomerId;
+      const isValidStripeCust = (id?: string) => Boolean(id && id.startsWith('cus_') && id !== `cus_${activeClientId}`);
+      let customerIdToVault = isValidStripeCust(client.stripeCustomerId) ? client.stripeCustomerId : undefined;
       const liveKey = (settings.stripeLiveSecretKey || '').trim();
       const testKey = (settings.stripeSecretKey || '').trim();
       const activeSecretKey = isTestMode ? (testKey || liveKey) : (liveKey || testKey);
 
       if (activeSecretKey) {
         try {
-          const custRes = await createStripeCustomer({
-            secretKey: activeSecretKey,
-            email: client.email,
-            name: client.fullName,
-            cardToken,
-            clientId: client.id,
-          });
-          if (custRes.success && custRes.customerId) {
-            customerIdToVault = custRes.customerId;
+          if (customerIdToVault) {
+            const attachRes = await attachCardTokenToCustomer({
+              secretKey: activeSecretKey,
+              customerId: customerIdToVault,
+              cardToken,
+            });
+            if (!attachRes.success) {
+              customerIdToVault = undefined;
+            }
+          }
+
+          if (!customerIdToVault) {
+            const custRes = await createStripeCustomer({
+              secretKey: activeSecretKey,
+              email: client.email,
+              name: client.fullName,
+              cardToken,
+              clientId: activeClientId,
+            });
+            if (custRes.success && custRes.customerId) {
+              customerIdToVault = custRes.customerId;
+              updateDocument('clients', activeClientId, { stripeCustomerId: custRes.customerId });
+            }
           }
         } catch (e) {
           console.warn('Vaulting notice:', e);
         }
       }
 
-      addSavedCard(clientId, {
+      addSavedCard(activeClientId, {
         cardHolder: cardHolderName || client.fullName,
         brand,
         last4: last4Digits,
@@ -818,7 +916,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
 
   const handleRunAutoDeductionTest = async () => {
     setAutoDeductionMsg('Authorizing automatic recurring charge with Stripe API...');
-    const res = await triggerAutoDeductionRenewal(clientId, activePackage?.packageDefinitionId);
+    const res = await triggerAutoDeductionRenewal(activeClientId, activePackage?.packageDefinitionId);
     if (res.success) {
       setAutoDeductionMsg(`SUCCESS! ${res.message} Fresh session credits added to your wallet!`);
     } else {
@@ -890,7 +988,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
           <p><strong>PACKAGE PURCHASED:</strong> ${pay.packageName}</p>
           <p><strong>DESCRIPTION:</strong> Personal Training package containing training sessions with assigned trainer ${trainer?.fullName}. Valid for 30 calendar days in Asia/Dubai timezone.</p>
           <p><strong>PAYMENT METHOD:</strong> ${pay.paymentMethod}</p>
-          <p><strong>DATE:</strong> ${pay.paymentDate} GST</p>
+          <p><strong>DATE & TIME:</strong> ${formatReadableDate(pay.paymentDate) || pay.paymentDate}${(() => { const t = formatDubaiTime((pay as any).paidAt || (pay as any).failedAt || pay.createdAt); return t ? ` at ${t}` : ' GST'; })()}</p>
         </div>
 
         <div style="margin-top: 24px; padding-top: 16px; border-top: 2px solid #0f172a; text-align: right; font-size: 18px; font-weight: 800; color: #0f172a;">
@@ -1457,12 +1555,22 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
                   <p className="text-xs text-slate-500">Package ID: {activePackage.id} • AED {activePackage.packagePriceAED}</p>
                 </div>
 
-                <div className="text-right bg-amber-50 p-3 rounded-xl border border-amber-200">
-                  <div className="text-[10px] font-bold text-amber-800 uppercase">30-Day Expiry Counter</div>
-                  <div className="text-xl font-black text-amber-900">
-                    {daysRemaining === 0 ? 'Expires Today!' : `${daysRemaining} Days Remaining`}
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsBuyModalOpen(true)}
+                    className="px-3.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center space-x-1.5 transition-colors cursor-pointer"
+                  >
+                    <CreditCard className="w-3.5 h-3.5" />
+                    <span>Buy / Upgrade Package</span>
+                  </button>
+                  <div className="text-right bg-amber-50 p-3 rounded-xl border border-amber-200">
+                    <div className="text-[10px] font-bold text-amber-800 uppercase">30-Day Expiry Counter</div>
+                    <div className="text-xl font-black text-amber-900">
+                      {daysRemaining === 0 ? 'Expires Today!' : `${daysRemaining} Days Remaining`}
+                    </div>
+                    <div className="text-[10px] text-slate-500">Fixed Expiry: {activePackage.expiryDate}</div>
                   </div>
-                  <div className="text-[10px] text-slate-500">Fixed Expiry: {activePackage.expiryDate}</div>
                 </div>
               </div>
 
@@ -1667,60 +1775,174 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
       {/* PAYMENTS TAB */}
       {activeTab === 'payments' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-6 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
-            <h3 className="font-bold text-slate-900 text-base flex items-center space-x-2">
-              <CreditCard className="w-5 h-5 text-purple-600 shrink-0" />
-              <span>Client Payments & Receipts</span>
-            </h3>
-            <span className="text-xs text-slate-500 font-mono">AED Currency (Asia/Dubai)</span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div>
+              <h3 className="font-bold text-slate-900 text-base flex items-center space-x-2">
+                <CreditCard className="w-5 h-5 text-purple-600 shrink-0" />
+                <span>Client Payments & Receipts</span>
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Sorted newest-first • Currency AED (Asia/Dubai)
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {clientPayments.some((p) => p.status === 'Superseded') && (
+                <button
+                  type="button"
+                  onClick={() => setShowSupersededPayments((v) => !v)}
+                  className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs cursor-pointer"
+                >
+                  {showSupersededPayments ? 'Hide Superseded Drafts' : 'Show Superseded Drafts'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleClientReloadStripe}
+                disabled={isReloadingStripe}
+                className="px-3.5 py-2 rounded-xl border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-900 font-bold text-xs flex items-center space-x-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-purple-700 ${isReloadingStripe ? 'animate-spin' : ''}`} />
+                <span>{isReloadingStripe ? 'Syncing with Stripe...' : 'Reload from Stripe'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsBuyModalOpen(true)}
+                className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center space-x-1.5 shadow-xs cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Buy Package</span>
+              </button>
+            </div>
           </div>
 
+          {stripeReloadMsg && (
+            <div
+              className={`p-3 rounded-xl text-xs font-semibold flex items-center justify-between ${
+                stripeReloadMsg.success
+                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                  : 'bg-red-50 text-red-800 border border-red-200'
+              }`}
+            >
+              <span>{stripeReloadMsg.message}</span>
+              <button type="button" onClick={() => setStripeReloadMsg(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           <div className="space-y-3">
-            {clientPayments.length === 0 ? (
-              <div className="text-xs text-slate-400 italic py-6 text-center">No payment receipts found.</div>
-            ) : (
-              clientPayments.map((p) => (
-                <div key={p.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
-                    <div>
-                      <span className="font-black text-slate-900 text-base">{p.packageName}</span>
-                      <div className="text-slate-500 font-mono text-[10px] sm:text-[11px] break-all mt-0.5">
-                        Ref: {p.id} • {p.transactionReference}
+            {(() => {
+              const visiblePayments = showSupersededPayments
+                ? clientPayments
+                : clientPayments.filter((p) => p.status !== 'Superseded');
+
+              if (visiblePayments.length === 0) {
+                return (
+                  <div className="text-xs text-slate-400 italic py-6 text-center">
+                    No payment receipts found yet. If you just paid via Stripe, click "Reload from Stripe" above.
+                  </div>
+                );
+              }
+
+              return visiblePayments.map((p) => {
+                const isPaid = p.status === 'Paid';
+                const isFailed = p.status === 'Failed';
+                const isPending = p.status === 'Pending';
+
+                return (
+                  <div
+                    key={p.id}
+                    className={`p-4 rounded-2xl border text-xs space-y-3 ${
+                      isFailed
+                        ? 'bg-red-50/40 border-red-200'
+                        : isPending
+                        ? 'bg-amber-50/40 border-amber-200'
+                        : 'bg-slate-50 border-slate-200'
+                    }`}
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+                      <div>
+                        <span className="font-black text-slate-900 text-base">{p.packageName}</span>
+                        <div className="text-slate-500 font-mono text-[10px] sm:text-[11px] break-all mt-0.5">
+                          Ref: {p.id} • {p.transactionReference}
+                        </div>
+                      </div>
+
+                      <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-1">
+                        <div className="text-lg font-black text-slate-900">
+                          {formatAED(isPaid ? p.amountPaidAED : p.amountAED)}
+                        </div>
+                        <span
+                          className={`text-[10px] px-2.5 py-0.5 rounded-full font-extrabold uppercase tracking-wider border ${
+                            isPaid
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                              : isFailed
+                              ? 'bg-red-100 text-red-800 border-red-300'
+                              : isPending
+                              ? 'bg-amber-100 text-amber-800 border-amber-300'
+                              : 'bg-slate-100 text-slate-600 border-slate-300'
+                          }`}
+                        >
+                          {p.status}
+                        </span>
                       </div>
                     </div>
 
-                    <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-1">
-                      <div className="text-lg font-black text-slate-900">{formatAED(p.amountPaidAED)}</div>
-                      <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-bold uppercase tracking-wider">
-                        {p.status}
-                      </span>
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 text-slate-700 text-xs space-y-1">
+                      <div><strong>Description:</strong> Personal training package with trainer {trainer?.fullName || 'Specialist'}. Valid for 30 calendar days.</div>
+                      <div className="text-[11px] text-slate-500">
+                        Method: {p.paymentMethod} • Date: {formatReadableDate(p.paymentDate) || p.paymentDate}
+                        {(() => {
+                          const timeStr = formatDubaiTime((p as any).paidAt || (p as any).failedAt || p.createdAt);
+                          return timeStr ? ` • Time: ${timeStr}` : ' (Asia/Dubai GST)';
+                        })()}
+                      </div>
+                      {isFailed && p.notes && (
+                        <div className="text-[11px] text-red-700 font-semibold pt-1">
+                          Reason: {p.notes}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-1">
+                      {isPending && pendingPackages.some((pk) => pk.id === p.packageId || pk.paymentReference === p.id) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const matchPkg = pendingPackages.find((pk) => pk.id === p.packageId || pk.paymentReference === p.id);
+                            if (matchPkg) {
+                              setSelectedPendingPkg(matchPkg);
+                              setIsPayPendingModalOpen(true);
+                            }
+                          }}
+                          className="w-full sm:w-auto px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-xs transition-colors cursor-pointer"
+                        >
+                          <CreditCard className="w-3.5 h-3.5" />
+                          <span>Pay Invoice Now</span>
+                        </button>
+                      )}
+
+                      {isPaid && (
+                        settings.clientPdfReceiptEnabled ? (
+                          <button
+                            onClick={() => printReceipt(p.id)}
+                            className="w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-xs transition-colors cursor-pointer"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                            <span>Print PDF Receipt</span>
+                          </button>
+                        ) : (
+                          <span className="w-full sm:w-auto text-[11px] font-bold text-slate-400 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 flex items-center justify-center space-x-1.5">
+                            <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <span>Receipt Printing Disabled by Admin</span>
+                          </span>
+                        )
+                      )}
                     </div>
                   </div>
-
-                  <div className="bg-white p-3 rounded-xl border border-slate-200 text-slate-700 text-xs space-y-1">
-                    <div><strong>Description:</strong> Personal training package with trainer {trainer?.fullName || 'Specialist'}. Valid for 30 calendar days.</div>
-                    <div className="text-[11px] text-slate-500">Method: {p.paymentMethod} • Date: {p.paymentDate} (Asia/Dubai GST)</div>
-                  </div>
-
-                  <div className="flex justify-end pt-1">
-                    {settings.clientPdfReceiptEnabled ? (
-                      <button
-                        onClick={() => printReceipt(p.id)}
-                        className="w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-xs transition-colors cursor-pointer"
-                      >
-                        <Printer className="w-3.5 h-3.5" />
-                        <span>Print PDF Receipt</span>
-                      </button>
-                    ) : (
-                      <span className="w-full sm:w-auto text-[11px] font-bold text-slate-400 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 flex items-center justify-center space-x-1.5">
-                        <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span>Receipt Printing Disabled by Admin</span>
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))
-            )}
+                );
+              });
+            })()}
           </div>
         </div>
       )}

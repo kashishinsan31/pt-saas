@@ -598,8 +598,13 @@ export const SubscriptionsModule: React.FC = () => {
                 </tr>
               ) : (
                 payments
-                  .filter((p) => p.paymentMethod === 'Stripe' || p.status === 'Failed')
+                  .filter((p) => (p.paymentMethod === 'Stripe' || p.status === 'Failed') && p.status !== 'Superseded')
                   .filter((p) => autoPayLogFilter === 'all' || p.status === autoPayLogFilter)
+                  .sort((a, b) => {
+                    const timeA = new Date(a.createdAt || a.paymentDate || 0).getTime() || 0;
+                    const timeB = new Date(b.createdAt || b.paymentDate || 0).getTime() || 0;
+                    return timeB - timeA;
+                  })
                   .map((pay) => {
                     const client = clients.find((c) => c.id === pay.clientId);
 
@@ -613,7 +618,7 @@ export const SubscriptionsModule: React.FC = () => {
                         </td>
 
                         <td className="py-3 px-4">
-                          <div className="font-extrabold text-slate-900">{client?.fullName || 'Client'}</div>
+                          <div className="font-extrabold text-slate-900">{client?.fullName || `Unmatched (${pay.clientId})`}</div>
                           <div className="text-[10px] text-slate-400 font-mono">{pay.clientId}</div>
                         </td>
 
@@ -638,7 +643,9 @@ export const SubscriptionsModule: React.FC = () => {
                             className={`px-3 py-1 rounded-full text-[11px] font-black inline-flex items-center space-x-1 ${
                               pay.status === 'Paid'
                                 ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                : 'bg-red-100 text-red-800 border border-red-300 animate-pulse'
+                                : pay.status === 'Failed'
+                                ? 'bg-red-100 text-red-800 border border-red-300 animate-pulse'
+                                : 'bg-amber-100 text-amber-800 border border-amber-300'
                             }`}
                           >
                             {pay.status === 'Paid' ? (
@@ -646,13 +653,20 @@ export const SubscriptionsModule: React.FC = () => {
                                 <CheckCircle className="w-3 h-3 text-emerald-600" />
                                 <span>SUCCESSFUL CHARGE</span>
                               </>
-                            ) : (
+                            ) : pay.status === 'Failed' ? (
                               <>
                                 <AlertCircle className="w-3 h-3 text-red-600" />
                                 <span>FAILED / DECLINED</span>
                               </>
+                            ) : (
+                              <span>{pay.status.toUpperCase()}</span>
                             )}
                           </span>
+                          {pay.status === 'Failed' && pay.notes && (
+                            <div className="text-[10px] text-red-600 mt-1 max-w-[220px] ml-auto text-right leading-tight">
+                              {pay.notes}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );

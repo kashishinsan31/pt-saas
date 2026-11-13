@@ -47,6 +47,8 @@ export const Header: React.FC<HeaderProps> = ({
     trainers,
     clients,
     refreshDataFromServer,
+    syncWithStripe,
+    settings,
     isRefreshingServerData,
     lastServerSyncTime,
   } = useApp();
@@ -54,7 +56,8 @@ export const Header: React.FC<HeaderProps> = ({
   const [refreshFeedback, setRefreshFeedback] = useState<string | null>(null);
 
   const handleServerRefresh = async () => {
-    const res = await refreshDataFromServer();
+    const hasStripeKey = Boolean((settings?.stripeLiveSecretKey || settings?.stripeSecretKey || '').trim());
+    const res = hasStripeKey ? await syncWithStripe() : await refreshDataFromServer();
     setRefreshFeedback(res.message);
     setTimeout(() => {
       setRefreshFeedback(null);

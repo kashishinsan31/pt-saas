@@ -426,9 +426,16 @@ export interface StripeSyncResult {
   charges?: any[];
 }
 
+function getTimeMs(val?: string | number): number {
+  if (!val) return 0;
+  if (typeof val === 'number') return val > 1e11 ? val : val * 1000;
+  const ms = new Date(val).getTime();
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
 /**
- * Synchronizes recent charges directly from Stripe API into Firestore.
- * Bypasses local proxy/server route constraints and guarantees 100% resilient synchronization.
+ * Synchronizes recent charges, payment intents, and checkout sessions directly from Stripe API into Firestore.
+ * Reconciles successful/failed transactions, self-heals client links, and activates pending packages.
  */
 export async function syncStripeChargesDirectly(secretKey: string): Promise<StripeSyncResult> {
   const cleanKey = secretKey?.trim();
@@ -443,15 +450,16 @@ export async function syncStripeChargesDirectly(secretKey: string): Promise<Stri
   }
 
   try {
-    const res = await fetch('https://api.stripe.com/v1/charges?limit=25', {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${cleanKey}`,
-      },
-    });
+    const authHeader = { Authorization: `Bearer ${cleanKey}` };
+    const [chargesRes, piRes, sessionsRes, customersRes] = await Promise.all([
+      fetch('https://api.stripe.com/v1/charges?limit=50', { method: 'GET', headers: authHeader }),
+      fetch('https://api.stripe.com/v1/payment_intents?limit=50', { method: 'GET', headers: authHeader }).catch(() => null),
+      fetch('https://api.stripe.com/v1/checkout/sessions?limit=50', { method: 'GET', headers: authHeader }).catch(() => null),
+      fetch('https://api.stripe.com/v1/customers?limit=50', { method: 'GET', headers: authHeader }).catch(() => null),
+    ]);
 
-    const data = await res.json();
-    if (!res.ok || data.error) {
+    const data = await chargesRes.json();
+    if (!chargesRes.ok || data.error) {
       return {
         success: false,
         syncedCount: 0,
@@ -461,178 +469,440 @@ export async function syncStripeChargesDirectly(secretKey: string): Promise<Stri
       };
     }
 
+    const piData = piRes && piRes.ok ? await piRes.json().catch(() => ({ data: [] })) : { data: [] };
+    const sessionsData = sessionsRes && sessionsRes.ok ? await sessionsRes.json().catch(() => ({ data: [] })) : { data: [] };
+    const customersData = customersRes && customersRes.ok ? await customersRes.json().catch(() => ({ data: [] })) : { data: [] };
+
     const charges = data.data || [];
+    const paymentIntents = piData.data || [];
+    const checkoutSessions = sessionsData.data || [];
+    const stripeCustomers = customersData.data || [];
+
+    const customersById = new Map<string, any>();
+    for (const sc of stripeCustomers) {
+      if (sc?.id) customersById.set(sc.id, sc);
+    }
+
+    const sessionsByPI = new Map<string, any>();
+    for (const cs of checkoutSessions) {
+      if (cs?.payment_intent && typeof cs.payment_intent === 'string') {
+        sessionsByPI.set(cs.payment_intent, cs);
+      }
+    }
+
     let syncedCount = 0;
     let newFailuresCount = 0;
     let reconciledCount = 0;
 
     // Fetch snapshot of current Firestore collections
-    const [paymentsSnap, packagesSnap, clientsSnap] = await Promise.all([
+    const [paymentsSnap, packagesSnap, clientsSnap, savedCardsSnap, pkgDefsSnap] = await Promise.all([
       getDocs(collection(db, 'payments')),
       getDocs(collection(db, 'clientPackages')),
       getDocs(collection(db, 'clients')),
+      getDocs(collection(db, 'savedCards')),
+      getDocs(collection(db, 'packageDefinitions')),
     ]);
 
     const paymentsList = paymentsSnap.docs.map((d) => ({ ...d.data(), id: d.id })) as PaymentRecord[];
     const packagesList = packagesSnap.docs.map((d) => ({ ...d.data(), id: d.id })) as ClientPackage[];
     const clientsList = clientsSnap.docs.map((d) => ({ ...d.data(), id: d.id })) as Client[];
+    const savedCardsList = savedCardsSnap.docs.map((d) => ({ ...d.data(), id: d.id })) as any[];
+    const pkgDefsList = pkgDefsSnap.docs.map((d) => ({ ...d.data(), id: d.id })) as any[];
+
+    const resolveClientForStripeObj = (obj: any, extraSession?: any): { matchedClient?: Client; candidateEmail: string; candidateCustId: string } => {
+      const candidateCustId = (typeof obj.customer === 'string' ? obj.customer : obj.customer?.id) || '';
+      const stripeCust = candidateCustId ? customersById.get(candidateCustId) : undefined;
+      const mergedMeta = {
+        ...(stripeCust?.metadata || {}),
+        ...(extraSession?.metadata || {}),
+        ...(obj.metadata || {}),
+      };
+
+      const candidateEmails = [
+        obj.receipt_email,
+        obj.billing_details?.email,
+        obj.customer_details?.email,
+        extraSession?.customer_details?.email,
+        extraSession?.customer_email,
+        stripeCust?.email,
+        mergedMeta.email,
+        mergedMeta.clientEmail,
+      ]
+        .filter((e): e is string => typeof e === 'string' && e.trim().length > 0)
+        .map((e) => e.trim().toLowerCase());
+
+      const candidateEmail = candidateEmails[0] || '';
+      const desc = (obj.description || '').toLowerCase();
+      const custName = (stripeCust?.name || obj.billing_details?.name || extraSession?.customer_details?.name || '').trim().toLowerCase();
+
+      let matchedClient: Client | undefined;
+
+      // 1. Direct metadata / client_reference_id match
+      const metaClientId = mergedMeta.clientId || extraSession?.client_reference_id;
+      if (metaClientId) {
+        matchedClient = clientsList.find((cl) => cl.id === metaClientId);
+      }
+
+      // 2. Client stripeCustomerId match
+      if (!matchedClient && candidateCustId) {
+        matchedClient = clientsList.find((cl) => cl.stripeCustomerId === candidateCustId);
+      }
+
+      // 3. SavedCards stripeCustomerId match (self-heals when client doc lacks stripeCustomerId)
+      if (!matchedClient && candidateCustId) {
+        const cardMatch = savedCardsList.find((sc) => sc.stripeCustomerId === candidateCustId);
+        if (cardMatch?.clientId) {
+          matchedClient = clientsList.find((cl) => cl.id === cardMatch.clientId);
+        }
+      }
+
+      // 4. Case-insensitive email match across any email source
+      if (!matchedClient && candidateEmails.length > 0) {
+        matchedClient = clientsList.find(
+          (cl) => cl.email && candidateEmails.includes(cl.email.trim().toLowerCase())
+        );
+      }
+
+      // 5. Client full name in description or Stripe customer name
+      if (!matchedClient && desc) {
+        matchedClient = clientsList.find((cl) => cl.fullName && desc.includes(cl.fullName.trim().toLowerCase()));
+      }
+      if (!matchedClient && custName) {
+        matchedClient = clientsList.find((cl) => cl.fullName && cl.fullName.trim().toLowerCase() === custName);
+      }
+
+      return { matchedClient, candidateEmail, candidateCustId };
+    };
+
+    const activateClientPackageAndCredits = async (pkg: ClientPackage, payId: string, chargeId: string, client?: Client, paidAmountAED?: number) => {
+      const todayStr = formatDubaiDate(new Date());
+      const def = pkgDefsList.find((d) => d.id === pkg.packageDefinitionId);
+      const validityDays = def?.validityDays || 30;
+      const expiryDate = pkg.expiryDate && pkg.expiryDate >= todayStr
+        ? pkg.expiryDate
+        : formatDubaiDate(new Date(Date.now() + validityDays * 86400000));
+      const sessionsToAllocate = pkg.remainingSessions > 0 ? pkg.remainingSessions : (pkg.totalSessions || def?.sessionCount || 12);
+
+      // Supersede any other Active package for this client to maintain strictly 1 active package
+      for (const other of packagesList) {
+        if (other.clientId === pkg.clientId && other.id !== pkg.id && other.status === 'Active') {
+          const nextStatus = other.remainingSessions === 0 ? 'Completed' : 'Superseded';
+          await updateDoc(doc(db, 'clientPackages', other.id), { status: nextStatus });
+          other.status = nextStatus as any;
+        }
+      }
+
+      const pkgUpdate: Record<string, any> = {
+        status: 'Active',
+        remainingSessions: sessionsToAllocate,
+        paymentReference: payId,
+        expiryDate,
+      };
+      if (paidAmountAED && paidAmountAED > 0 && (!pkg.packagePriceAED || pkg.packagePriceAED <= 0)) {
+        pkgUpdate.packagePriceAED = paidAmountAED;
+      }
+      await updateDoc(doc(db, 'clientPackages', pkg.id), cleanFirestoreData(pkgUpdate));
+      pkg.status = 'Active';
+      pkg.remainingSessions = sessionsToAllocate;
+
+      if (client) {
+        const currentCredits = client.sessionCreditsRemaining || 0;
+        const clientUpdate: Record<string, any> = {
+          activePackageId: pkg.id,
+          sessionCreditsRemaining: currentCredits > 0 && client.activePackageId === pkg.id ? currentCredits : sessionsToAllocate,
+        };
+        await updateDoc(doc(db, 'clients', client.id), cleanFirestoreData(clientUpdate));
+        client.activePackageId = pkg.id;
+      }
+
+      // Create transaction ledger entry if not already recorded for this package
+      const txnId = `TXN-SYNC-${chargeId.replace(/[^a-zA-Z0-9]/g, '').slice(-12)}`;
+      await setDoc(doc(db, 'transactions', txnId), cleanFirestoreData({
+        id: txnId,
+        clientId: pkg.clientId,
+        packageId: pkg.id,
+        timestamp: new Date().toISOString(),
+        type: 'PURCHASE_ALLOCATION',
+        creditChange: sessionsToAllocate,
+        previousBalance: 0,
+        newBalance: sessionsToAllocate,
+        reason: `Stripe Sync activated package "${pkg.packageName}" (${chargeId}). Allocated ${sessionsToAllocate} credits until ${expiryDate}.`,
+        responsibleUserId: 'stripe-sync',
+        responsibleRole: 'system',
+      }));
+    };
 
     for (const c of charges) {
       const chargeId = c.id;
+      const piId = typeof c.payment_intent === 'string' ? c.payment_intent : c.payment_intent?.id;
+      const linkedSession = piId ? sessionsByPI.get(piId) : undefined;
       const amountAED = c.amount ? c.amount / 100 : 0;
       const isFailed = c.status === 'failed' || c.paid === false;
+      const isPending = c.status === 'pending';
       const failureMsg = c.failure_message || c.outcome?.seller_message || 'Payment declined by issuing bank';
       const failureCode = c.failure_code || c.outcome?.reason || 'card_declined';
 
-      // Locate client candidate
-      const candidateEmail = (c.receipt_email || c.billing_details?.email || c.customer_details?.email || '').trim().toLowerCase();
-      const candidateCustId = c.customer;
-      const desc = (c.description || '').toLowerCase();
+      const { matchedClient, candidateEmail, candidateCustId } = resolveClientForStripeObj(c, linkedSession);
 
-      let matchedClient: Client | undefined = undefined;
-      if (candidateCustId) {
-        matchedClient = clientsList.find((cl) => cl.stripeCustomerId === candidateCustId);
-      }
-      if (!matchedClient && candidateEmail) {
-        matchedClient = clientsList.find((cl) => cl.email && cl.email.trim().toLowerCase() === candidateEmail);
-      }
-      if (!matchedClient && desc) {
-        matchedClient = clientsList.find((cl) => cl.fullName && desc.includes(cl.fullName.toLowerCase()));
+      // Self-heal missing/bogus stripeCustomerId on matched Client doc using valid successful charge (never overwrite an existing valid cus_ ID)
+      const hasValidCustId =
+        matchedClient?.stripeCustomerId &&
+        matchedClient.stripeCustomerId.startsWith('cus_') &&
+        matchedClient.stripeCustomerId !== `cus_${matchedClient.id}`;
+      if (matchedClient && !isFailed && candidateCustId && candidateCustId.startsWith('cus_') && !hasValidCustId) {
+        await updateDoc(doc(db, 'clients', matchedClient.id), { stripeCustomerId: candidateCustId });
+        matchedClient.stripeCustomerId = candidateCustId;
       }
 
-      const clientId = matchedClient?.id || c.metadata?.clientId || (candidateEmail ? 'PENDING_MATCH' : 'UNKNOWN');
+      const clientId = matchedClient?.id || c.metadata?.clientId || linkedSession?.metadata?.clientId || (candidateEmail ? 'PENDING_MATCH' : 'UNKNOWN');
       const clientName = matchedClient?.fullName || candidateEmail || 'Client';
 
-      // 1. Check if a payment record with this charge ID already exists
+      // 1. Check if a payment record with this charge ID or payment_intent ID already exists
       const existingPay = paymentsList.find(
-        (p) => p.transactionReference === chargeId || (p as any).stripePaymentIntentId === chargeId
+        (p) =>
+          p.transactionReference === chargeId ||
+          (p as any).stripePaymentIntentId === chargeId ||
+          (piId && (p.transactionReference === piId || (p as any).stripePaymentIntentId === piId))
       );
 
       if (isFailed) {
         if (existingPay) {
-          if (existingPay.status !== 'Failed') {
+          const needsClientFix =
+            matchedClient &&
+            (existingPay.clientId === 'PENDING_MATCH' || existingPay.clientId === 'UNKNOWN' || existingPay.clientId === 'UNMATCHED' || existingPay.clientId === 'UNKNOWN_CLIENT');
+          if (existingPay.status !== 'Failed' || needsClientFix) {
             await updateDoc(doc(db, 'payments', existingPay.id), cleanFirestoreData({
+              clientId: matchedClient ? matchedClient.id : existingPay.clientId,
               status: 'Failed',
               notes: `Stripe Card Declined: ${failureMsg} (${failureCode})`,
             }));
             syncedCount++;
-            newFailuresCount++;
+            if (existingPay.status !== 'Failed') newFailuresCount++;
           }
         } else {
-          // Record new failed payment
           const payId = `PAY-FAILED-${chargeId.replace(/[^a-zA-Z0-9]/g, '')}`;
           const failedRecord: PaymentRecord = {
             id: payId,
             clientId,
-            packageId: c.metadata?.packageId || 'NONE',
+            packageId: c.metadata?.packageId || linkedSession?.metadata?.packageId || 'NONE',
             packageName: c.metadata?.packageName || (c.description || 'Declined Package Payment'),
-            baseAmountAED: Math.round(amountAED / 1.05),
-            vatAmountAED: Math.round(amountAED - Math.round(amountAED / 1.05)),
+            baseAmountAED: Math.round((amountAED / 1.05) * 100) / 100,
+            vatAmountAED: Math.round((amountAED - amountAED / 1.05) * 100) / 100,
             amountAED,
             amountPaidAED: 0,
             outstandingBalanceAED: amountAED,
             paymentDate: formatDubaiDate(new Date(c.created * 1000)),
             paymentMethod: 'Stripe',
             transactionReference: chargeId,
-            stripePaymentIntentId: chargeId,
+            stripePaymentIntentId: piId || chargeId,
             status: 'Failed',
-            notes: `Stripe Card Declined: ${failureMsg} (${failureCode})`,
+            notes: `Stripe Card Declined: ${failureMsg} (${failureCode})${candidateEmail ? ` • Email: ${candidateEmail}` : ''}`,
             createdAt: new Date(c.created * 1000).toISOString(),
           };
           await setDoc(doc(db, 'payments', payId), cleanFirestoreData(failedRecord));
+          paymentsList.push(failedRecord);
           syncedCount++;
           newFailuresCount++;
         }
-      } else {
-        // Succeeded charge
+      } else if (!isPending) {
+        // Succeeded & paid charge
         if (existingPay) {
-          if (existingPay.status !== 'Paid') {
-            await updateDoc(doc(db, 'payments', existingPay.id), cleanFirestoreData({
+          const needsClientHeal =
+            matchedClient &&
+            (existingPay.clientId === 'PENDING_MATCH' || existingPay.clientId === 'UNKNOWN' || existingPay.clientId === 'UNMATCHED' || existingPay.clientId === 'UNKNOWN_CLIENT');
+          const needsStatusHeal = existingPay.status !== 'Paid';
+
+          if (needsClientHeal || needsStatusHeal) {
+            const updates: Record<string, any> = {
               status: 'Paid',
               amountPaidAED: existingPay.amountAED || amountAED,
               outstandingBalanceAED: 0,
               paymentMethod: 'Stripe',
-              notes: `Synchronized and verified live from Stripe API (${chargeId})`,
-            }));
+              transactionReference: chargeId,
+              stripePaymentIntentId: piId || chargeId,
+              notes: `Synchronized and verified live from Stripe API (${chargeId})${matchedClient ? ` for ${matchedClient.fullName}` : ''}`,
+            };
+            if (needsClientHeal && matchedClient) {
+              updates.clientId = matchedClient.id;
+              existingPay.clientId = matchedClient.id;
+            }
+            existingPay.status = 'Paid';
+            await updateDoc(doc(db, 'payments', existingPay.id), cleanFirestoreData(updates));
             reconciledCount++;
             syncedCount++;
 
-            // Activate package if associated
             if (existingPay.packageId && existingPay.packageId !== 'NONE') {
               const pkg = packagesList.find((p) => p.id === existingPay.packageId);
               if (pkg && pkg.status !== 'Active') {
-                await updateDoc(doc(db, 'clientPackages', pkg.id), cleanFirestoreData({
-                  status: 'Active',
-                  remainingSessions: pkg.remainingSessions > 0 ? pkg.remainingSessions : (pkg.totalSessions || 12),
-                  paymentReference: existingPay.id,
-                }));
+                await activateClientPackageAndCredits(pkg, existingPay.id, chargeId, matchedClient, amountAED);
               }
             }
           }
         } else {
-          // Check if there is any pending payment for this client that can be reconciled
-          const pendingPay = paymentsList.find(
-            (p) => p.status === 'Pending' && (p.clientId === clientId || (matchedClient && p.clientId === matchedClient.id))
-          );
+          // Check if there is a Pending payment for this client (prioritize closest amount match, newest first)
+          const pendingCandidates = matchedClient
+            ? packagesList && paymentsList
+                .filter((p) => p.status === 'Pending' && p.clientId === matchedClient.id)
+                .sort((a, b) => {
+                  const diffA = Math.abs((a.amountAED || 0) - amountAED);
+                  const diffB = Math.abs((b.amountAED || 0) - amountAED);
+                  if (Math.abs(diffA - diffB) > 0.25) return diffA - diffB;
+                  return getTimeMs(b.createdAt || b.paymentDate) - getTimeMs(a.createdAt || a.paymentDate);
+                })
+            : [];
+
+          const pendingPay = pendingCandidates[0];
 
           if (pendingPay) {
             await updateDoc(doc(db, 'payments', pendingPay.id), cleanFirestoreData({
               status: 'Paid',
-              amountPaidAED: pendingPay.amountAED || amountAED,
+              amountPaidAED: amountAED > 0 ? amountAED : (pendingPay.amountAED || amountAED),
               outstandingBalanceAED: 0,
               transactionReference: chargeId,
-              stripePaymentIntentId: c.payment_intent || chargeId,
+              stripePaymentIntentId: piId || chargeId,
               paymentMethod: 'Stripe',
+              paymentDate: formatDubaiDate(new Date(c.created * 1000)),
               notes: `Synchronized and verified live from Stripe API (${chargeId})`,
             }));
+            pendingPay.status = 'Paid';
             reconciledCount++;
             syncedCount++;
 
-            // Activate associated pending package
             if (pendingPay.packageId && pendingPay.packageId !== 'NONE') {
               const pkg = packagesList.find((p) => p.id === pendingPay.packageId);
               if (pkg) {
-                const sessionsToAllocate = pkg.remainingSessions > 0 ? pkg.remainingSessions : (pkg.totalSessions || 12);
-                await updateDoc(doc(db, 'clientPackages', pkg.id), cleanFirestoreData({
-                  status: 'Active',
-                  remainingSessions: sessionsToAllocate,
-                  paymentReference: pendingPay.id,
-                }));
-
-                // Update client session credits
-                if (matchedClient) {
-                  const currentCredits = matchedClient.sessionCreditsRemaining || 0;
-                  await updateDoc(doc(db, 'clients', matchedClient.id), cleanFirestoreData({
-                    activePackageId: pkg.id,
-                    sessionCreditsRemaining: currentCredits + sessionsToAllocate,
-                  }));
-                }
+                await activateClientPackageAndCredits(pkg, pendingPay.id, chargeId, matchedClient, amountAED);
               }
             }
           } else {
-            // Create a synchronized record
+            // Create a new synchronized record
             const payId = `PAY-STRIPE-SYNC-${chargeId.replace(/[^a-zA-Z0-9]/g, '')}`;
+            const baseAmt = Math.round((amountAED / 1.05) * 100) / 100;
+            const vatAmt = Math.round((amountAED - baseAmt) * 100) / 100;
+            let resolvedPkgId = c.metadata?.packageId || linkedSession?.metadata?.packageId || 'NONE';
+            let resolvedPkgName = c.metadata?.packageName || linkedSession?.metadata?.packageName || c.description || 'Personal Training Package';
+
+            // Check if client has a Pending Payment package matching this amount (even if payment record was missing)
+            if (matchedClient && resolvedPkgId === 'NONE') {
+              const matchingPendingPkg = packagesList.find(
+                (p) => p.clientId === matchedClient.id && p.status === 'Pending Payment'
+              );
+              if (matchingPendingPkg) {
+                resolvedPkgId = matchingPendingPkg.id;
+                resolvedPkgName = matchingPendingPkg.packageName;
+                await activateClientPackageAndCredits(matchingPendingPkg, payId, chargeId, matchedClient, amountAED);
+                reconciledCount++;
+              } else {
+                // Check if this recent Stripe charge matches an active package definition and client has no package referencing it
+                const alreadyLinkedPkg = packagesList.find(
+                  (p) => p.paymentReference === chargeId || p.paymentReference === payId || p.paymentReference === piId
+                );
+                if (!alreadyLinkedPkg) {
+                  const matchedDef = pkgDefsList.find(
+                    (d) =>
+                      d.id === (c.metadata?.packageDefinitionId || linkedSession?.metadata?.packageDefinitionId) ||
+                      Math.abs((d.priceAED || 0) - amountAED) < 0.25 ||
+                      Math.abs((d.priceAED || 0) * 1.05 - amountAED) < 0.25
+                  );
+                  const sessionCount = parseInt(c.metadata?.sessionCount || '', 10) || matchedDef?.sessionCount;
+                  if (matchedDef || sessionCount) {
+                    const newPkgId = `PKG-SYNC-${chargeId.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}`;
+                    const startDate = formatDubaiDate(new Date(c.created * 1000));
+                    const validityDays = matchedDef?.validityDays || 30;
+                    const expiryDate = formatDubaiDate(new Date(c.created * 1000 + validityDays * 86400000));
+                    const sessCount = sessionCount || 12;
+                    resolvedPkgId = newPkgId;
+                    resolvedPkgName = matchedDef?.name || `${sessCount} Sessions Package`;
+
+                    const syncedPkg: ClientPackage = {
+                      id: newPkgId,
+                      clientId: matchedClient.id,
+                      packageDefinitionId: matchedDef?.id || 'PKG-STRIPE-SYNC',
+                      packageName: resolvedPkgName,
+                      basePriceAED: baseAmt,
+                      vatAmountAED: vatAmt,
+                      packagePriceAED: amountAED,
+                      totalSessions: sessCount,
+                      completedSessions: 0,
+                      refundedSessions: 0,
+                      lateCancellationDeductions: 0,
+                      noShowDeductions: 0,
+                      expiredSessions: 0,
+                      remainingSessions: sessCount,
+                      startDate,
+                      expiryDate,
+                      status: 'Active',
+                      paymentReference: payId,
+                      purchasedAt: new Date(c.created * 1000).toISOString(),
+                    };
+                    await setDoc(doc(db, 'clientPackages', newPkgId), cleanFirestoreData(syncedPkg));
+                    packagesList.push(syncedPkg);
+                    await activateClientPackageAndCredits(syncedPkg, payId, chargeId, matchedClient, amountAED);
+                    reconciledCount++;
+                  }
+                }
+              }
+            }
+
             const payRecord: PaymentRecord = {
               id: payId,
               clientId,
-              packageId: c.metadata?.packageId || 'NONE',
-              packageName: c.metadata?.packageName || c.description || 'Personal Training Package',
-              baseAmountAED: Math.round(amountAED / 1.05),
-              vatAmountAED: Math.round(amountAED - Math.round(amountAED / 1.05)),
+              packageId: resolvedPkgId,
+              packageName: resolvedPkgName,
+              baseAmountAED: baseAmt,
+              vatAmountAED: vatAmt,
               amountAED,
               amountPaidAED: amountAED,
               outstandingBalanceAED: 0,
               paymentDate: formatDubaiDate(new Date(c.created * 1000)),
               paymentMethod: 'Stripe',
               transactionReference: chargeId,
-              stripePaymentIntentId: c.payment_intent || chargeId,
+              stripePaymentIntentId: piId || chargeId,
               status: 'Paid',
-              notes: `Synchronized from Stripe API (${chargeId}) for ${clientName}`,
+              notes: `Synchronized from Stripe API (${chargeId}) for ${clientName}${candidateEmail && !matchedClient ? ` • Stripe Email: ${candidateEmail}` : ''}`,
               createdAt: new Date(c.created * 1000).toISOString(),
             };
             await setDoc(doc(db, 'payments', payId), cleanFirestoreData(payRecord));
+            paymentsList.push(payRecord);
             syncedCount++;
           }
+        }
+      }
+    }
+
+    // Also inspect PaymentIntents that failed before producing a Charge
+    for (const pi of paymentIntents) {
+      if (pi.status === 'requires_payment_method' && pi.last_payment_error && !pi.latest_charge) {
+        const piId = pi.id;
+        const alreadyRecorded = paymentsList.some(
+          (p) => p.transactionReference === piId || (p as any).stripePaymentIntentId === piId
+        );
+        if (!alreadyRecorded) {
+          const { matchedClient, candidateEmail } = resolveClientForStripeObj(pi);
+          const amountAED = pi.amount ? pi.amount / 100 : 0;
+          const payId = `PAY-FAILED-${piId.replace(/[^a-zA-Z0-9]/g, '')}`;
+          const failedRecord: PaymentRecord = {
+            id: payId,
+            clientId: matchedClient?.id || pi.metadata?.clientId || (candidateEmail ? 'PENDING_MATCH' : 'UNKNOWN'),
+            packageId: pi.metadata?.packageId || 'NONE',
+            packageName: pi.metadata?.packageName || pi.description || 'Declined Package Payment',
+            baseAmountAED: Math.round((amountAED / 1.05) * 100) / 100,
+            vatAmountAED: Math.round((amountAED - amountAED / 1.05) * 100) / 100,
+            amountAED,
+            amountPaidAED: 0,
+            outstandingBalanceAED: amountAED,
+            paymentDate: formatDubaiDate(new Date(pi.created * 1000)),
+            paymentMethod: 'Stripe',
+            transactionReference: piId,
+            stripePaymentIntentId: piId,
+            status: 'Failed',
+            notes: `Stripe Payment Failed: ${pi.last_payment_error.message || 'Card declined'} (${pi.last_payment_error.code || 'card_declined'})`,
+            createdAt: new Date(pi.created * 1000).toISOString(),
+          };
+          await setDoc(doc(db, 'payments', payId), cleanFirestoreData(failedRecord));
+          paymentsList.push(failedRecord);
+          syncedCount++;
+          newFailuresCount++;
         }
       }
     }
@@ -642,7 +912,7 @@ export async function syncStripeChargesDirectly(secretKey: string): Promise<Stri
       syncedCount,
       newFailuresCount,
       reconciledCount,
-      message: `Direct Stripe Gateway Sync: Synchronized ${syncedCount} charges (${reconciledCount} payments reconciled, ${newFailuresCount} declined charges recorded).`,
+      message: `Direct Stripe Gateway Sync: ${syncedCount} record(s) synced (${reconciledCount} reconciled, ${newFailuresCount} failed). Checked ${charges.length} Stripe charges.`,
       charges,
     };
   } catch (err: any) {

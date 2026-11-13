@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { PackageDefinition, Client, PaymentRecord, NotificationItem } from '../../types';
 import { formatAED, calculateExpiryDate, formatDubaiDate } from '../../utils/dubaiTime';
-import { processStripeApiCharge, getStripe, createStripeCustomer } from '../../services/stripeApi';
-import { setDocument } from '../../services/firestoreService';
+import { processStripeApiCharge, getStripe, createStripeCustomer, attachCardTokenToCustomer } from '../../services/stripeApi';
+import { setDocument, updateDocument } from '../../services/firestoreService';
 import {
   CreditCard,
   ShieldCheck,
@@ -30,14 +30,24 @@ interface StripeCheckoutModalProps {
 }
 
 export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
-  packageDef,
+  packageDef: initialPackageDef,
   client,
   isOpen,
   onClose,
   onSuccess,
 }) => {
-  const { purchasePackage, settings, updateSettings, addSavedCard, savedCards, promoCodes, validatePromoCode, incrementPromoCodeUsage } = useApp();
+  const { packageDefinitions, purchasePackage, settings, updateSettings, addSavedCard, savedCards, promoCodes, validatePromoCode, incrementPromoCodeUsage } = useApp();
 
+  const activePackageDefs = packageDefinitions.filter((p) => p.status === 'Active');
+  const [activePackageDef, setActivePackageDef] = useState<PackageDefinition>(initialPackageDef);
+
+  useEffect(() => {
+    if (isOpen && initialPackageDef) {
+      setActivePackageDef(initialPackageDef);
+    }
+  }, [isOpen, initialPackageDef]);
+
+  const packageDef = activePackageDef || initialPackageDef;
   const clientSavedCards = savedCards.filter((c) => c.clientId === client.id);
   const [selectedSavedCardId, setSelectedSavedCardId] = useState<string>('NEW_CARD');
 
@@ -207,7 +217,10 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
         return;
       }
 
-      let customerIdToVault = selectedCard.stripeCustomerId || client.stripeCustomerId;
+      const isValidStripeCust = (id?: string) => Boolean(id && id.startsWith('cus_') && id !== `cus_${client.id}`);
+      let customerIdToVault =
+        (isValidStripeCust(selectedCard.stripeCustomerId) ? selectedCard.stripeCustomerId : undefined) ||
+        (isValidStripeCust(client.stripeCustomerId) ? client.stripeCustomerId : undefined);
       const cardTokenToUse = selectedCard.stripeToken;
 
       if (!customerIdToVault && cardTokenToUse && activeSecretKey) {
@@ -221,6 +234,8 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
           });
           if (custRes.success && custRes.customerId) {
             customerIdToVault = custRes.customerId;
+            updateDocument('savedCards', selectedCard.id, { stripeCustomerId: custRes.customerId });
+            updateDocument('clients', client.id, { stripeCustomerId: custRes.customerId });
           }
         } catch (e) {
           console.warn('Customer vault notice:', e);
@@ -368,19 +383,39 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
       const expMonthToSave = String(cardObj?.exp_month || '12');
       const expYearToSave = String(cardObj?.exp_year || '2028');
 
-      // If client requested auto-pay or card saving, vault card to permanent Stripe Customer
-      let customerIdToVault = client.stripeCustomerId;
+      // Vault card to permanent Stripe Customer (attach to existing valid customer or create new one)
+      const isValidStripeCust = (id?: string) => Boolean(id && id.startsWith('cus_') && id !== `cus_${client.id}`);
+      let customerIdToVault = isValidStripeCust(client.stripeCustomerId) ? client.stripeCustomerId : undefined;
+      let attachedSourceId: string | undefined;
+
       if (isSecKeyValid && cardToken && (saveCardForFuture || isRecurring)) {
         try {
-          const custRes = await createStripeCustomer({
-            secretKey: activeSecretKey,
-            email: client.email,
-            name: client.fullName,
-            cardToken,
-            clientId: client.id,
-          });
-          if (custRes.success && custRes.customerId) {
-            customerIdToVault = custRes.customerId;
+          if (customerIdToVault) {
+            const attachRes = await attachCardTokenToCustomer({
+              secretKey: activeSecretKey,
+              customerId: customerIdToVault,
+              cardToken,
+            });
+            if (attachRes.success && attachRes.sourceId) {
+              attachedSourceId = attachRes.sourceId;
+            } else {
+              // Stale or mismatched customer ID in DB — create a fresh live Stripe customer
+              customerIdToVault = undefined;
+            }
+          }
+
+          if (!customerIdToVault) {
+            const custRes = await createStripeCustomer({
+              secretKey: activeSecretKey,
+              email: client.email,
+              name: client.fullName,
+              cardToken,
+              clientId: client.id,
+            });
+            if (custRes.success && custRes.customerId) {
+              customerIdToVault = custRes.customerId;
+              updateDocument('clients', client.id, { stripeCustomerId: custRes.customerId });
+            }
           }
         } catch (e) {
           console.warn('Customer vaulting notice:', e);
@@ -394,7 +429,7 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
         statementDescriptor: settings.stripeStatementDescriptor || 'WAITER WALK DUBAI',
         receiptEmail: client.email,
         customerId: customerIdToVault || undefined,
-        cardToken: customerIdToVault ? undefined : cardToken,
+        cardToken: customerIdToVault ? attachedSourceId : cardToken,
       });
 
       if (!stripeRes.success) {
@@ -670,6 +705,37 @@ export const StripeCheckoutModal: React.FC<StripeCheckoutModalProps> = ({
 
             {/* Itemized Order & Invoice Summary Box */}
             <div className="bg-slate-50 p-3 sm:p-4 rounded-2xl border border-slate-200 space-y-3">
+              {activePackageDefs.length > 1 && (
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                    Choose Package Plan
+                  </label>
+                  <select
+                    value={packageDef.id}
+                    onChange={(e) => {
+                      const nextDef = activePackageDefs.find((d) => d.id === e.target.value);
+                      if (nextDef) {
+                        setActivePackageDef(nextDef);
+                        const nextPct = nextDef.discountPercentage || 0;
+                        setDiscountPercent(nextPct);
+                        setDiscountAmountAED(nextPct ? Math.round((nextDef.priceAED * nextPct) / 100) : 0);
+                        setAppliedPromoCode(nextPct ? 'PACKAGE_DISCOUNT' : '');
+                        setPromoInput('');
+                        setPromoError('');
+                        setPromoSuccessMsg('');
+                      }
+                    }}
+                    className="w-full px-3 py-2 text-xs font-bold border border-slate-300 rounded-xl bg-white text-slate-900 focus:ring-2 focus:ring-blue-600"
+                  >
+                    {activePackageDefs.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} — {formatAED(d.priceAED)} ({d.sessionCount} Sessions / {d.validityDays || 30}d)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="flex justify-between items-start gap-2">
                 <div className="min-w-0">
                   <span className="text-[9px] sm:text-[10px] font-black uppercase text-blue-700 tracking-wider bg-blue-100 px-2 py-0.5 rounded-full border border-blue-200">

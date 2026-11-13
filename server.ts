@@ -49,7 +49,15 @@ app.post('/api/stripe/simulate-webhook', async (req: express.Request, res: expre
 app.all('/api/stripe/sync-charges', async (_req: express.Request, res: express.Response) => {
   try {
     const snap = await getDoc(doc(db, 'settings', 'global'));
-    const secretKey = (snap.data()?.stripeLiveSecretKey || snap.data()?.stripeSecretKey || process.env.STRIPE_SECRET_KEY || '').trim();
+    const sData = snap.data() || {};
+    const isLive = sData.stripeMode !== 'test';
+    const secretKey = (
+      (isLive
+        ? (sData.stripeLiveSecretKey || sData.stripeSecretKey)
+        : (sData.stripeSecretKey || sData.stripeLiveSecretKey)) ||
+      process.env.STRIPE_SECRET_KEY ||
+      ''
+    ).trim();
 
     if (!secretKey) {
       return res.status(400).json({
@@ -61,7 +69,7 @@ app.all('/api/stripe/sync-charges', async (_req: express.Request, res: express.R
     const result = await syncStripeChargesWithFirestore(secretKey);
     res.json({
       success: true,
-      message: `Synchronized ${result.syncedCount} charges from Stripe (${result.newFailuresCount} declined/failed charges recorded).`,
+      message: `Synchronized ${result.syncedCount} new & ${result.reconciledCount || 0} reconciled Stripe payment(s) (${result.newFailuresCount} declined/failed recorded).`,
       ...result,
     });
   } catch (err: any) {

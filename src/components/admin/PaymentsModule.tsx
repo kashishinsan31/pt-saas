@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { formatAED, formatReadableDate } from '../../utils/dubaiTime';
+import { formatAED, formatReadableDate, formatDubaiTime } from '../../utils/dubaiTime';
 import { exportToCSV, exportToPDFPrint } from '../../utils/exportUtils';
 import {
   CreditCard,
@@ -17,69 +17,25 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
-import { syncStripeChargesDirectly } from '../../services/stripeApi';
-
 export const PaymentsModule: React.FC = () => {
-  const { payments, clients, packageDefinitions, purchasePackage, refreshDataFromServer, settings } = useApp();
+  const { payments, clients, packageDefinitions, purchasePackage, syncWithStripe, assignPaymentToClient } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [methodFilter, setMethodFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [isSyncingStripe, setIsSyncingStripe] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<{ success: boolean; message: string } | null>(null);
+  const [assignSelections, setAssignSelections] = useState<Record<string, string>>({});
+  const [assigningId, setAssigningId] = useState<string | null>(null);
 
   const handleSyncWithStripe = async () => {
     setIsSyncingStripe(true);
     setSyncFeedback(null);
     try {
-      let syncSuccess = false;
-      let syncMessage = '';
-      let syncedCount = 0;
-
-      // 1. Try server-side synchronization route
-      try {
-        const res = await fetch('/api/stripe/sync-charges', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        });
-        const contentType = res.headers.get('content-type') || '';
-        if (res.ok && contentType.includes('application/json')) {
-          const data = await res.json();
-          if (data && data.success) {
-            syncSuccess = true;
-            syncMessage = data.message || `Successfully synced ${data.syncedCount || 0} charges from Stripe.`;
-            syncedCount = data.syncedCount || 0;
-          }
-        }
-      } catch (serverErr) {
-        console.warn('Server sync endpoint returned error, falling back to direct Stripe API sync:', serverErr);
-      }
-
-      // 2. Client-side direct fallback if server returned non-JSON, 404, or HTML
-      if (!syncSuccess) {
-        const activeKey = (settings?.stripeLiveSecretKey || settings?.stripeSecretKey || '').trim();
-        if (!activeKey) {
-          throw new Error('Stripe Secret Key missing. Please configure your key in Admin Settings > Stripe Gateway.');
-        }
-
-        const directResult = await syncStripeChargesDirectly(activeKey);
-        if (directResult.success) {
-          syncSuccess = true;
-          syncMessage = directResult.message;
-          syncedCount = directResult.syncedCount;
-        } else {
-          throw new Error(directResult.message || 'Direct sync with Stripe API failed.');
-        }
-      }
-
-      // 3. Immediately refresh fresh data from Firestore server
-      if (refreshDataFromServer) {
-        await refreshDataFromServer();
-      }
-
+      const res = await syncWithStripe();
       setSyncFeedback({
-        success: true,
-        message: syncMessage || `Synced ${syncedCount} charges from Stripe gateway.`,
+        success: res.success,
+        message: res.message || (res.success ? 'Synced payments from Stripe gateway.' : 'Error communicating with Stripe gateway.'),
       });
     } catch (err: any) {
       setSyncFeedback({
@@ -88,6 +44,18 @@ export const PaymentsModule: React.FC = () => {
       });
     } finally {
       setIsSyncingStripe(false);
+    }
+  };
+
+  const handleAssignClient = async (paymentId: string) => {
+    const targetClientId = assignSelections[paymentId] || clients[0]?.id;
+    if (!targetClientId) return;
+    setAssigningId(paymentId);
+    try {
+      const res = await assignPaymentToClient(paymentId, targetClientId);
+      setSyncFeedback({ success: res.success, message: res.message });
+    } finally {
+      setAssigningId(null);
     }
   };
 
@@ -104,9 +72,10 @@ export const PaymentsModule: React.FC = () => {
   };
 
   const handleExportCSV = () => {
-    const headers = ['Payment ID', 'Client Name', 'Package Name', 'Amount (AED)', 'Paid (AED)', 'Date', 'Method', 'Status', 'Ref'];
+    const headers = ['Payment ID', 'Client Name', 'Package Name', 'Amount (AED)', 'Paid (AED)', 'Date', 'Time (GST)', 'Method', 'Status', 'Ref'];
     const rows = payments.map((p) => {
       const client = clients.find((c) => c.id === p.clientId);
+      const timeStr = formatDubaiTime((p as any).paidAt || (p as any).failedAt || p.createdAt);
       return [
         p.id,
         client?.fullName || 'Client',
@@ -114,6 +83,7 @@ export const PaymentsModule: React.FC = () => {
         p.amountAED,
         p.amountPaidAED,
         p.paymentDate,
+        timeStr || 'N/A',
         p.paymentMethod,
         p.status,
         p.transactionReference,
@@ -148,7 +118,8 @@ export const PaymentsModule: React.FC = () => {
           </div>
           <div>
             <strong>PAYMENT DETAILS:</strong><br/>
-            Date: ${pay.paymentDate}<br/>
+            Date: ${formatReadableDate(pay.paymentDate) || pay.paymentDate}<br/>
+            ${(() => { const t = formatDubaiTime((pay as any).paidAt || (pay as any).failedAt || pay.createdAt); return t ? `Time: ${t}<br/>` : ''; })()}
             Method: ${pay.paymentMethod}<br/>
             Timezone: Asia/Dubai (GST)
           </div>
@@ -178,18 +149,30 @@ export const PaymentsModule: React.FC = () => {
     exportToPDFPrint(`Receipt_${pay.id}`, receiptHtml);
   };
 
-  const filteredPayments = payments.filter((p) => {
-    const client = clients.find((c) => c.id === p.clientId);
-    const matchesSearch =
-      p.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.packageName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      client?.fullName.toLowerCase().includes(searchQuery.toLowerCase());
+  const filteredPayments = payments
+    .filter((p) => {
+      const client = clients.find((c) => c.id === p.clientId);
+      const q = searchQuery.toLowerCase();
+      const matchesSearch =
+        !q ||
+        p.id.toLowerCase().includes(q) ||
+        (p.packageName || '').toLowerCase().includes(q) ||
+        (p.transactionReference || '').toLowerCase().includes(q) ||
+        (p.notes || '').toLowerCase().includes(q) ||
+        (client?.fullName || '').toLowerCase().includes(q) ||
+        (client?.email || '').toLowerCase().includes(q) ||
+        (p.clientId || '').toLowerCase().includes(q);
 
-    const matchesMethod = methodFilter === 'ALL' || p.paymentMethod === methodFilter;
-    const matchesStatus = statusFilter === 'ALL' || p.status === statusFilter;
+      const matchesMethod = methodFilter === 'ALL' || p.paymentMethod === methodFilter;
+      const matchesStatus = statusFilter === 'ALL' || p.status === statusFilter;
 
-    return matchesSearch && matchesMethod && matchesStatus;
-  });
+      return matchesSearch && matchesMethod && matchesStatus;
+    })
+    .sort((a, b) => {
+      const timeA = new Date(a.createdAt || a.paymentDate || 0).getTime() || 0;
+      const timeB = new Date(b.createdAt || b.paymentDate || 0).getTime() || 0;
+      return timeB - timeA;
+    });
 
   const totalCollected = payments.filter((p) => p.status === 'Paid').reduce((sum, p) => sum + p.amountPaidAED, 0);
 
@@ -304,7 +287,7 @@ export const PaymentsModule: React.FC = () => {
                 <th className="py-3 px-4">Client</th>
                 <th className="py-3 px-4">Package</th>
                 <th className="py-3 px-4">Amount Paid</th>
-                <th className="py-3 px-4">Method & Date</th>
+                <th className="py-3 px-4">Method, Date & Time</th>
                 <th className="py-3 px-4">Status</th>
                 <th className="py-3 px-4 text-right">Receipt</th>
               </tr>
@@ -319,14 +302,58 @@ export const PaymentsModule: React.FC = () => {
               ) : (
                 filteredPayments.map((pay) => {
                   const client = clients.find((c) => c.id === pay.clientId);
+                  const isUnmatched = !client || pay.clientId === 'PENDING_MATCH' || pay.clientId === 'UNMATCHED' || pay.clientId === 'UNKNOWN';
 
                   return (
                     <tr key={pay.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="py-3.5 px-4 font-mono font-bold text-slate-900">{pay.id}</td>
+                      <td className="py-3.5 px-4 font-mono font-bold text-slate-900">
+                        <div>{pay.id}</div>
+                        {pay.transactionReference && (
+                          <div className="text-[10px] font-normal text-slate-400 truncate max-w-[160px]" title={pay.transactionReference}>
+                            {pay.transactionReference}
+                          </div>
+                        )}
+                      </td>
 
                       <td className="py-3.5 px-4">
-                        <div className="font-bold text-slate-900">{client?.fullName || 'Client'}</div>
-                        <div className="text-[10px] text-slate-500">{client?.communityName}</div>
+                        {isUnmatched ? (
+                          <div className="space-y-1.5">
+                            <span className="inline-block px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-bold">
+                              Unmatched ({pay.clientId || 'UNKNOWN'})
+                            </span>
+                            {pay.notes && (
+                              <div className="text-[10px] text-slate-600 max-w-xs leading-snug">{pay.notes}</div>
+                            )}
+                            {clients.length > 0 && (
+                              <div className="flex items-center gap-1 pt-0.5">
+                                <select
+                                  value={assignSelections[pay.id] || clients[0]?.id || ''}
+                                  onChange={(e) => setAssignSelections((prev) => ({ ...prev, [pay.id]: e.target.value }))}
+                                  className="text-[10px] border border-slate-300 rounded px-1.5 py-1 bg-white max-w-[140px]"
+                                >
+                                  {clients.map((c) => (
+                                    <option key={c.id} value={c.id}>
+                                      {c.fullName} ({c.id})
+                                    </option>
+                                  ))}
+                                </select>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAssignClient(pay.id)}
+                                  disabled={assigningId === pay.id}
+                                  className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-[10px] font-bold disabled:opacity-50"
+                                >
+                                  {assigningId === pay.id ? '...' : 'Assign'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <>
+                            <div className="font-bold text-slate-900">{client.fullName}</div>
+                            <div className="text-[10px] text-slate-500">{client.communityName} • {client.id}</div>
+                          </>
+                        )}
                       </td>
 
                       <td className="py-3.5 px-4 font-semibold text-slate-800">{pay.packageName}</td>
@@ -337,7 +364,15 @@ export const PaymentsModule: React.FC = () => {
 
                       <td className="py-3.5 px-4">
                         <div className="font-bold text-blue-900">{pay.paymentMethod}</div>
-                        <div className="text-[10px] text-slate-500">{pay.paymentDate}</div>
+                        <div className="text-[11px] font-medium text-slate-700">
+                          {formatReadableDate(pay.paymentDate) || pay.paymentDate}
+                        </div>
+                        {(() => {
+                          const timeStr = formatDubaiTime((pay as any).paidAt || (pay as any).failedAt || pay.createdAt);
+                          return timeStr ? (
+                            <div className="text-[10px] font-semibold text-slate-500">{timeStr}</div>
+                          ) : null;
+                        })()}
                       </td>
 
                       <td className="py-3.5 px-4">
