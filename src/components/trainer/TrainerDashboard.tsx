@@ -55,7 +55,9 @@ export const TrainerDashboard: React.FC = () => {
 
   const trainerBookings = bookings.filter((b) => b.trainerId === trainerId);
   const todaySessions = trainerBookings.filter((b) => b.sessionDate === todayStr);
-  const upcomingSessions = trainerBookings.filter((b) => b.sessionDate >= todayStr && b.status === 'Scheduled');
+  const upcomingSessions = trainerBookings.filter(
+    (b) => b.sessionDate >= todayStr && (b.status === 'Scheduled' || b.status === 'Rescheduled')
+  );
   const completedSessions = trainerBookings.filter((b) => b.status === 'Completed');
 
   // Client Ratings & Review Feedback Summary
@@ -82,6 +84,11 @@ export const TrainerDashboard: React.FC = () => {
   const [rescheduleEndTime, setRescheduleEndTime] = useState('');
   const [rescheduleMsg, setRescheduleMsg] = useState('');
 
+  // Trainer Cancel Modal State
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+  const [selectedCancelBooking, setSelectedCancelBooking] = useState<any>(null);
+  const [cancelReasonTrainer, setCancelReasonTrainer] = useState('');
+
   const handleConfirmRescheduleTrainer = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRescheduleBooking) return;
@@ -98,6 +105,18 @@ export const TrainerDashboard: React.FC = () => {
     } else {
       setRescheduleMsg(res.message);
     }
+  };
+
+  const handleConfirmCancelTrainer = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCancelBooking) return;
+    cancelSessionByTrainer(
+      selectedCancelBooking.id,
+      cancelReasonTrainer.trim() || 'Cancelled by trainer'
+    );
+    setIsCancelModalOpen(false);
+    setSelectedCancelBooking(null);
+    setCancelReasonTrainer('');
   };
 
 
@@ -278,11 +297,20 @@ export const TrainerDashboard: React.FC = () => {
                 return (
                   <div
                     key={b.id}
-                    className="p-4 rounded-xl border border-slate-200 bg-slate-50 hover:bg-blue-50/20 transition-all flex justify-between items-center text-xs"
+                    className="p-4 rounded-xl border border-slate-200 bg-slate-50 hover:bg-blue-50/20 transition-all flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 text-xs"
                   >
                     <div>
-                      <div className="flex items-center space-x-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-extrabold text-slate-900 text-sm">{client?.fullName || 'Client'}</span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            b.status === 'Rescheduled'
+                              ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                              : 'bg-blue-100 text-blue-800 border border-blue-200'
+                          }`}
+                        >
+                          {b.status}
+                        </span>
                         <span className="text-slate-400 font-mono text-[11px]">{client?.communityName}</span>
                       </div>
 
@@ -302,9 +330,10 @@ export const TrainerDashboard: React.FC = () => {
                     {(() => {
                       const timing = canMarkSessionCompleted(b.sessionDate, b.startTime);
                       return (
-                        <div className="flex flex-col items-end gap-1.5 shrink-0">
-                          <div className="flex items-center space-x-1.5">
+                        <div className="flex flex-col sm:items-end gap-1.5 shrink-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             <button
+                              type="button"
                               onClick={() => {
                                 setSelectedRescheduleBooking(b);
                                 setRescheduleDate(b.sessionDate);
@@ -314,12 +343,13 @@ export const TrainerDashboard: React.FC = () => {
                                 setIsRescheduleModalOpen(true);
                               }}
                               className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs shadow-xs flex items-center space-x-1 cursor-pointer"
-                              title="Reschedule requested session date and timing"
+                              title="Reschedule session date and timing"
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                               <span>Reschedule</span>
                             </button>
                             <button
+                              type="button"
                               onClick={() => {
                                 setSelectedBooking(b);
                                 setIsCompleteModalOpen(true);
@@ -333,14 +363,25 @@ export const TrainerDashboard: React.FC = () => {
                               {!timing.allowed && <Lock className="w-3.5 h-3.5" />}
                               <span>Complete</span>
                             </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedCancelBooking(b);
+                                setCancelReasonTrainer('');
+                                setIsCancelModalOpen(true);
+                              }}
+                              className="px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg text-xs shadow-xs cursor-pointer"
+                              title="Cancel session (credit retained for client)"
+                            >
+                              Cancel
+                            </button>
                           </div>
                           {!timing.allowed && (
-                            <span className="text-[10px] text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200/60 max-w-[180px] text-right">
+                            <span className="text-[10px] text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200/60 max-w-[200px] sm:text-right">
                               {b.sessionDate > todayStr ? 'Opens session day' : `Opens at ${timing.allowedTimeString || '1h before start'}`}
                             </span>
                           )}
                         </div>
-
                       );
                     })()}
                   </div>
@@ -1190,6 +1231,68 @@ export const TrainerDashboard: React.FC = () => {
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold"
                 >
                   Save Rescheduled Date & Time
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Trainer Cancel Session Modal */}
+      {isCancelModalOpen && selectedCancelBooking && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-200">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Cancel Session (Trainer)</h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Client session credit is retained &amp; eligible for rescheduling.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCancelModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmCancelTrainer} className="space-y-4 text-xs">
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1">
+                <div className="font-bold text-slate-900">
+                  {clients.find((c) => c.id === selectedCancelBooking.clientId)?.fullName || 'Client'}
+                </div>
+                <div className="text-slate-600">
+                  {formatReadableDate(selectedCancelBooking.sessionDate)} • {selectedCancelBooking.startTime} - {selectedCancelBooking.endTime}
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1">Cancellation Reason</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Reason for trainer cancellation..."
+                  value={cancelReasonTrainer}
+                  onChange={(e) => setCancelReasonTrainer(e.target.value)}
+                  className="w-full p-2.5 border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCancelModalOpen(false)}
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 font-semibold"
+                >
+                  Keep Session
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold cursor-pointer"
+                >
+                  Confirm Cancellation
                 </button>
               </div>
             </form>

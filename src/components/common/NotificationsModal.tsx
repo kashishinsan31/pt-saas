@@ -1,6 +1,7 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
 import { NotificationItem } from '../../types';
+import { formatDubaiDateTime } from '../../utils/dubaiTime';
 import {
   Bell,
   X,
@@ -25,16 +26,19 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   onNavigate,
 }) => {
   const {
-    notifications,
+    currentUser,
+    userNotifications,
+    bookings,
     markNotificationRead,
     markAllNotificationsRead,
     deleteNotification,
     clearAllNotifications,
+    confirmBookingAttendance,
   } = useApp();
 
   if (!isOpen) return null;
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const unreadCount = userNotifications.filter((n) => !n.read).length;
 
   const getNotificationIcon = (type: NotificationItem['type']) => {
     switch (type) {
@@ -68,7 +72,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150">
       <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full max-h-[85vh] flex flex-col border border-slate-100 overflow-hidden">
-        {/* Simple Native-App Style Header */}
+        {/* Header */}
         <div className="px-5 py-4 bg-white border-b border-slate-100 flex items-center justify-between shrink-0">
           <div className="flex items-center space-x-2.5">
             <div className="w-9 h-9 rounded-2xl bg-blue-50 flex items-center justify-center text-blue-600">
@@ -83,12 +87,12 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                   </span>
                 )}
               </div>
-              <p className="text-[11px] text-slate-500">Updates, bookings & billing</p>
+              <p className="text-[11px] text-slate-500">Session reminders, bookings &amp; billing</p>
             </div>
           </div>
 
           <div className="flex items-center space-x-1">
-            {notifications.length > 0 && (
+            {userNotifications.length > 0 && (
               <button
                 onClick={clearAllNotifications}
                 className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-red-600 hover:bg-red-50 transition-colors"
@@ -111,7 +115,9 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
         {/* Quick Mark Read Sub-bar if unread exist */}
         {unreadCount > 0 && (
           <div className="px-5 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-xs text-slate-600 shrink-0">
-            <span>You have {unreadCount} unread notification{unreadCount > 1 ? 's' : ''}</span>
+            <span>
+              You have {unreadCount} unread notification{unreadCount > 1 ? 's' : ''}
+            </span>
             <button
               onClick={markAllNotificationsRead}
               className="text-blue-600 hover:text-blue-800 font-bold flex items-center space-x-1 text-xs"
@@ -122,86 +128,118 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
           </div>
         )}
 
-        {/* Notifications List - clean, uncluttered, each card fully visible */}
+        {/* Notifications List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          {notifications.length === 0 ? (
+          {userNotifications.length === 0 ? (
             <div className="py-14 text-center px-4">
               <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400 mb-3">
                 <Bell className="w-7 h-7" />
               </div>
               <div className="font-bold text-slate-800 text-sm">All Caught Up!</div>
               <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">
-                No active notifications right now. New bookings, payment alerts, and schedule changes will appear here.
+                No active notifications right now. 24-hour session reminders, bookings, and payment alerts will appear here.
               </p>
             </div>
           ) : (
-            notifications.map((n) => (
-              <div
-                key={n.id}
-                onClick={() => handleNotificationClick(n)}
-                className={`p-3.5 rounded-2xl border transition-all cursor-pointer relative ${
-                  !n.read
-                    ? 'bg-blue-50/60 border-blue-200 shadow-2xs'
-                    : 'bg-white border-slate-200/80 hover:bg-slate-50/80'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2.5">
-                  <div className="flex items-start space-x-3 min-w-0 flex-1">
-                    <div className="p-2 rounded-xl bg-white border border-slate-200/80 shadow-2xs shrink-0 mt-0.5">
-                      {getNotificationIcon(n.type)}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center space-x-2">
-                        <span className={`font-bold text-xs ${!n.read ? 'text-slate-900' : 'text-slate-700'}`}>
-                          {n.title}
-                        </span>
-                        {!n.read && (
-                          <span className="w-2 h-2 rounded-full bg-blue-600 shrink-0"></span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-600 mt-1 leading-relaxed">{n.message}</p>
-                      <div className="flex items-center space-x-2 mt-2 text-[10px] text-slate-400">
-                        <Clock className="w-3 h-3 text-slate-400" />
-                        <span>{n.timestamp}</span>
-                      </div>
-                    </div>
-                  </div>
+            userNotifications.map((n) => {
+              const linkedBooking = n.bookingId ? bookings.find((b) => b.id === n.bookingId) : undefined;
+              const canConfirm =
+                currentUser?.role === 'client' &&
+                n.category === '24h_reminder' &&
+                (linkedBooking?.status === 'Scheduled' || linkedBooking?.status === 'Rescheduled') &&
+                !linkedBooking.clientConfirmedAttendance;
 
-                  {/* Individual Clear / Delete button & Read action */}
-                  <div className="flex items-center space-x-1 shrink-0">
-                    {!n.read && (
+              return (
+                <div
+                  key={n.id}
+                  onClick={() => handleNotificationClick(n)}
+                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer relative ${
+                    !n.read
+                      ? 'bg-blue-50/60 border-blue-200 shadow-2xs'
+                      : 'bg-white border-slate-200/80 hover:bg-slate-50/80'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2.5">
+                    <div className="flex items-start space-x-3 min-w-0 flex-1">
+                      <div className="p-2 rounded-xl bg-white border border-slate-200/80 shadow-2xs shrink-0 mt-0.5">
+                        {getNotificationIcon(n.type)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center space-x-2">
+                          <span className={`font-bold text-xs ${!n.read ? 'text-slate-900' : 'text-slate-700'}`}>
+                            {n.title}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600 mt-1 leading-relaxed">{n.message}</p>
+
+                        {canConfirm && linkedBooking && (
+                          <div className="mt-2.5 flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                confirmBookingAttendance(linkedBooking.id);
+                              }}
+                              className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg text-[11px] flex items-center gap-1 cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Confirm Attendance</span>
+                            </button>
+                          </div>
+                        )}
+
+                        {linkedBooking?.clientConfirmedAttendance && n.category === '24h_reminder' && (
+                          <div className="mt-2 text-[11px] font-semibold text-emerald-700 flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Attendance confirmed</span>
+                          </div>
+                        )}
+
+                        <div className="flex items-center space-x-2 mt-2 text-[10px] text-slate-400 font-mono tabular-nums">
+                          <Clock className="w-3 h-3 text-slate-400" />
+                          <span>{formatDubaiDateTime(n.timestamp) || n.timestamp}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Read / Delete actions */}
+                    <div className="flex items-center space-x-1 shrink-0">
+                      {!n.read && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            markNotificationRead(n.id);
+                          }}
+                          className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
+                          title="Mark as read"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                        </button>
+                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          markNotificationRead(n.id);
+                          deleteNotification(n.id);
                         }}
-                        className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
-                        title="Mark as read"
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Clear this notification"
+                        aria-label="Clear notification"
                       >
-                        <CheckCircle2 className="w-4 h-4" />
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
-                    )}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deleteNotification(n.id);
-                      }}
-                      className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      title="Clear this notification"
-                      aria-label="Clear notification"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
 
-        {/* Clean Footer */}
+        {/* Footer */}
         <div className="p-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 shrink-0">
-          <span>{notifications.length} notification{notifications.length !== 1 ? 's' : ''}</span>
+          <span>
+            {userNotifications.length} notification{userNotifications.length !== 1 ? 's' : ''}
+          </span>
           <button
             onClick={onClose}
             className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold rounded-xl text-xs transition-colors"

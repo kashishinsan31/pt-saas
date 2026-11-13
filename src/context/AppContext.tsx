@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from 'react';
 import {
   User,
   Client,
@@ -53,6 +53,7 @@ import {
 } from './initialData';
 import {
   formatDubaiDate,
+  formatReadableDate,
   calculate30DayExpiry,
   calculateExpiryDate,
   evaluateCancellationPolicy,
@@ -84,6 +85,7 @@ interface AppContextType {
   subscriptions: SubscriptionRecord[];
   savedCards: SavedCard[];
   notifications: NotificationItem[];
+  userNotifications: NotificationItem[];
   auditLogs: AuditLogItem[];
   settings: SystemSettings;
 
@@ -190,6 +192,7 @@ interface AppContextType {
   cancelSessionByAdmin: (bookingId: string, action: 'refund' | 'deduct', reason: string) => void;
   markNoShow: (bookingId: string) => void;
   rescheduleBooking: (bookingId: string, newDate: string, newStartTime: string, newEndTime: string) => { success: boolean; message: string };
+  confirmBookingAttendance: (bookingId: string) => { success: boolean; message: string };
 
   // Manual Expiry & Credit Overrides
   extendPackageExpiry: (packageId: string, newExpiryDate: string, reason: string) => void;
@@ -206,6 +209,7 @@ interface AppContextType {
   markAllNotificationsRead: () => void;
   deleteNotification: (id: string) => void;
   clearAllNotifications: () => void;
+  requestPushPermission: () => Promise<NotificationPermission | 'unsupported'>;
   logAudit: (action: string, details: string) => void;
 
   // Slider Management (Admin Only)
@@ -222,7 +226,7 @@ interface AppContextType {
   addClientHealthIssue: (clientId: string, issue: Omit<HealthIssueNote, 'id' | 'dateReported'>) => HealthIssueNote;
   updateClientHealthIssue: (clientId: string, issueId: string, updates: Partial<HealthIssueNote>) => void;
   deleteClientHealthIssue: (clientId: string, issueId: string) => void;
-  saveClientHealthDeclaration: (clientId: string, declaration: HealthDeclaration) => void;
+  saveClientHealthDeclaration: (clientId: string, declaration: HealthDeclaration) => { success: boolean; message: string };
 
   // Promo & Discount Codes Management (Admin & Checkout)
   promoCodes: PromoCode[];
@@ -648,83 +652,209 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     logAudit('PACKAGE_EXPIRY_JOB', `Persisted ${staleUpdates.length} automatic package expiry/completion update(s) in Asia/Dubai timezone.`);
   }, [clientPackages]);
 
-  // Automatic 3-Day Expiry & 2-Hour WhatsApp Session Reminder scanner engine
-  useEffect(() => {
-    const todayStr = formatDubaiDate(new Date());
+  // Track processed reminder IDs and browser push tags within this browser session to avoid duplicate firing
+  const processed24hRef = useRef<Set<string>>(new Set());
+  const processed2hRef = useRef<Set<string>>(new Set());
+  const sentPushTagsRef = useRef<Set<string>>(new Set());
 
-    // 1. Scan active client packages for 3-day expiry alert
-    clientPackages.forEach((pkg) => {
-      if (pkg.status === 'Active') {
-        const daysLeft = getDaysRemaining(pkg.expiryDate);
-        if (daysLeft <= 3 && daysLeft >= 0) {
-          const clientObj = clients.find((c) => c.id === pkg.clientId);
-          const clientUser = users.find(
-            (u) => u.associatedId === pkg.clientId || (clientObj && u.email.toLowerCase() === clientObj.email.toLowerCase())
-          );
+  const sendBrowserPushNotification = async (title: string, body: string, tag: string) => {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    if (sentPushTagsRef.current.has(tag)) return;
+    sentPushTagsRef.current.add(tag);
 
-          if (clientUser) {
-            setNotifications((prev) => {
-              const exists = prev.some(
-                (n) => n.userId === clientUser.id && n.type === 'expiry' && n.message.includes(pkg.id)
-              );
-              if (!exists) {
-                const notif: NotificationItem = {
-                  id: `NOTIF-EXP3D-${pkg.id}-${Date.now()}`,
-                  userId: clientUser.id,
-                  title: `⚠️ Plan Expiring in ${daysLeft} Day${daysLeft === 1 ? '' : 's'}`,
-                  message: `Your package "${pkg.packageName}" (${pkg.id}) expires on ${pkg.expiryDate}. Ensure your saved card is active for auto-pay renewal upon expiry.`,
-                  type: 'expiry',
-                  read: false,
-                  timestamp: new Date().toISOString(),
-                };
-                return [notif, ...prev];
-              }
-              return prev;
-            });
-          }
+    try {
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg && typeof reg.showNotification === 'function') {
+          await reg.showNotification(title, {
+            body,
+            icon: '/pwa-192x192.png',
+            badge: '/pwa-192x192.png',
+            tag,
+          });
+          return;
         }
       }
-    });
+      new Notification(title, { body, icon: '/pwa-192x192.png', tag });
+    } catch {
+      // Silently ignore if browser blocks background Notification constructor
+    }
+  };
 
-    // 2. Scan today's scheduled bookings for 2-hour WhatsApp reminders
-    const todayBookings = bookings.filter((b) => b.sessionDate === todayStr && b.status === 'Scheduled');
-    todayBookings.forEach((b) => {
-      const { hoursDiff } = evaluateCancellationPolicy(b.sessionDate, b.startTime);
-      if (hoursDiff <= 2 && hoursDiff > 0) {
+  const requestPushPermission = async (): Promise<NotificationPermission | 'unsupported'> => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      return 'unsupported';
+    }
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm === 'granted') {
+        await sendBrowserPushNotification(
+          'Session Alerts Activated',
+          'You will receive 24-hour reminders before your upcoming Waiter Walk training sessions.',
+          `ww-push-enabled-${Date.now()}`
+        );
+      }
+      return perm;
+    } catch {
+      return Notification.permission;
+    }
+  };
+
+  // Filter notifications relevant to the active logged-in user
+  const userNotifications = useMemo(() => {
+    if (!currentUser) return [];
+    if (currentUser.role === 'admin') {
+      return notifications.filter(
+        (n) => n.userId === 'ADMIN' || n.userId === currentUser.id || n.userId === 'ALL'
+      );
+    }
+    return notifications.filter(
+      (n) =>
+        n.userId === currentUser.id ||
+        (currentUser.associatedId ? n.userId === currentUser.associatedId : false) ||
+        n.userId === 'ALL'
+    );
+  }, [notifications, currentUser]);
+
+  // Automatic 3-Day Expiry, 24-Hour Session Reminder & 2-Hour WhatsApp Reminder scanner engine
+  useEffect(() => {
+    const runReminderScanner = () => {
+      const now = new Date();
+      const todayStr = formatDubaiDate(now);
+      const nowIso = now.toISOString();
+
+      // 1. Scan active client packages for 3-day expiry alert
+      clientPackages.forEach((pkg) => {
+        if (pkg.status === 'Active') {
+          const daysLeft = getDaysRemaining(pkg.expiryDate);
+          if (daysLeft <= 3 && daysLeft >= 0) {
+            const clientObj = clients.find((c) => c.id === pkg.clientId);
+            const clientUser = users.find(
+              (u) => u.associatedId === pkg.clientId || (clientObj && u.email.toLowerCase() === clientObj.email.toLowerCase())
+            );
+            const targetUserId = clientUser?.id || pkg.clientId;
+            const notifId = `NOTIF-EXP3D-${pkg.id}-${pkg.expiryDate}`;
+
+            const alreadyExists = notifications.some(
+              (n) => n.id === notifId || (n.userId === targetUserId && n.type === 'expiry' && n.message.includes(pkg.id))
+            );
+            if (!alreadyExists) {
+              const notif: NotificationItem = {
+                id: notifId,
+                userId: targetUserId,
+                title: `Plan Expiring in ${daysLeft} Day${daysLeft === 1 ? '' : 's'}`,
+                message: `Your package "${pkg.packageName}" (${pkg.id}) expires on ${pkg.expiryDate}. Ensure your saved card is active for auto-pay renewal upon expiry.`,
+                type: 'expiry',
+                category: 'general',
+                read: false,
+                timestamp: nowIso,
+              };
+              setNotifications((prev) => (prev.some((x) => x.id === notifId) ? prev : [notif, ...prev]));
+              setDocument('notifications', notifId, notif);
+            }
+          }
+        }
+      });
+
+      // 2. Scan ALL scheduled/rescheduled bookings for 24-Hour Reminder (helps prevent <12h last-minute cancellations)
+      const scheduledBookings = bookings.filter((b) => b.status === 'Scheduled' || b.status === 'Rescheduled');
+      scheduledBookings.forEach((b) => {
+        const { hoursDiff } = evaluateCancellationPolicy(b.sessionDate, b.startTime, now);
+
         const clientObj = clients.find((c) => c.id === b.clientId);
         const trainerObj = trainers.find((t) => t.id === b.trainerId);
         const clientUser = users.find(
           (u) => u.associatedId === b.clientId || (clientObj && u.email.toLowerCase() === clientObj.email.toLowerCase())
         );
+        if (!clientObj) return;
 
-        if (clientObj && clientUser) {
-          const cleanPhone = clientObj.whatsappNumber.replace(/[^0-9+]/g, '');
-          const waMsg = `⏰ 2-Hour Workout Reminder: Hello ${clientObj.fullName}! Your personal training session with ${trainerObj?.fullName || 'your coach'} starts in 2 hours at ${b.startTime} GST (${b.location}). See you soon!`;
-          const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(waMsg)}`;
+        const targetUserId = clientUser?.id || b.clientId;
+        const cleanPhone = clientObj.whatsappNumber.replace(/[^0-9+]/g, '');
 
-          setNotifications((prev) => {
-            const exists = prev.some(
-              (n) => n.userId === clientUser.id && n.type === 'booking' && n.message.includes(b.id) && n.title.includes('2-Hour')
+        // 24-Hour Advance Reminder Window (0 < hoursDiff <= 24)
+        if (hoursDiff > 0 && hoursDiff <= 24) {
+          const notif24Id = `NOTIF-REM24H-${b.id}`;
+          const alreadyDispatched =
+            Boolean(b.reminder24hSentAt) ||
+            processed24hRef.current.has(b.id) ||
+            notifications.some((n) => n.id === notif24Id);
+
+          const readableDate = formatReadableDate(b.sessionDate) || b.sessionDate;
+          const hoursLabel =
+            hoursDiff >= 1 ? `${Math.round(hoursDiff)}h` : `${Math.max(1, Math.round(hoursDiff * 60))}m`;
+          const cutoffNotice =
+            hoursDiff >= 12
+              ? 'Need to reschedule? Cancel at least 12 hours before start time to keep your session credit.'
+              : 'Your session is within the 12-hour window — please confirm attendance or contact your trainer.';
+          const reminderMessage = `Your session with ${trainerObj?.fullName || 'your trainer'} is scheduled for ${readableDate} at ${b.startTime} GST (${b.location}) — starting in ~${hoursLabel}. ${cutoffNotice}`;
+
+          if (!alreadyDispatched) {
+            processed24hRef.current.add(b.id);
+            const wa24Msg = `24-Hour Session Reminder: Hello ${clientObj.fullName}! Your personal training session with ${trainerObj?.fullName || 'your coach'} is on ${readableDate} at ${b.startTime} GST (${b.location}).`;
+            const notif: NotificationItem = {
+              id: notif24Id,
+              userId: targetUserId,
+              title: '24-Hour Session Reminder',
+              message: reminderMessage,
+              type: 'booking',
+              category: '24h_reminder',
+              bookingId: b.id,
+              read: false,
+              timestamp: nowIso,
+              actionUrl: `https://wa.me/${cleanPhone}?text=${encodeURIComponent(wa24Msg)}`,
+            };
+            setNotifications((prev) => (prev.some((x) => x.id === notif24Id) ? prev : [notif, ...prev]));
+            setDocument('notifications', notif24Id, notif);
+
+            setBookings((prev) =>
+              prev.map((item) => (item.id === b.id ? { ...item, reminder24hSentAt: nowIso } : item))
             );
-            if (!exists) {
-              const notif: NotificationItem = {
-                id: `NOTIF-WA2H-${b.id}-${Date.now()}`,
-                userId: clientUser.id,
-                title: `⏰ 2-Hour WhatsApp Session Reminder`,
-                message: `Session ${b.id} with ${trainerObj?.fullName || 'trainer'} starts in 2 hours (${b.startTime} GST). WhatsApp reminder notice ready.`,
-                type: 'booking',
-                read: false,
-                timestamp: new Date().toISOString(),
-                actionUrl: waUrl,
-              };
-              return [notif, ...prev];
-            }
-            return prev;
-          });
+            updateDocument('bookings', b.id, { reminder24hSentAt: nowIso });
+          }
+
+          // Trigger native browser push notification for the logged-in client if permitted & unconfirmed
+          const isLoggedInClient =
+            currentUser?.role === 'client' &&
+            (currentUser.id === targetUserId || currentUser.associatedId === b.clientId);
+          if (isLoggedInClient && !b.clientConfirmedAttendance) {
+            void sendBrowserPushNotification(
+              `Upcoming Session Reminder (${b.startTime} GST)`,
+              `${readableDate} with ${trainerObj?.fullName || 'your trainer'} at ${b.location}. ${hoursDiff >= 12 ? 'Free reschedule available up to 12h prior.' : 'Starting soon.'}`,
+              `ww-24h-${b.id}`
+            );
+          }
         }
-      }
-    });
-  }, [clientPackages, bookings, clients, trainers, users]);
+
+        // 2-Hour Final Reminder Window on session day (0 < hoursDiff <= 2)
+        if (b.sessionDate === todayStr && hoursDiff > 0 && hoursDiff <= 2) {
+          const notif2hId = `NOTIF-WA2H-${b.id}`;
+          if (!processed2hRef.current.has(b.id) && !notifications.some((n) => n.id === notif2hId)) {
+            processed2hRef.current.add(b.id);
+            const waMsg = `2-Hour Workout Reminder: Hello ${clientObj.fullName}! Your personal training session with ${trainerObj?.fullName || 'your coach'} starts in 2 hours at ${b.startTime} GST (${b.location}). See you soon!`;
+            const notif: NotificationItem = {
+              id: notif2hId,
+              userId: targetUserId,
+              title: '2-Hour WhatsApp Session Reminder',
+              message: `Session ${b.id} with ${trainerObj?.fullName || 'trainer'} starts in ~${Math.max(1, Math.round(hoursDiff * 60))} mins (${b.startTime} GST).`,
+              type: 'booking',
+              category: '2h_reminder',
+              bookingId: b.id,
+              read: false,
+              timestamp: nowIso,
+              actionUrl: `https://wa.me/${cleanPhone}?text=${encodeURIComponent(waMsg)}`,
+            };
+            setNotifications((prev) => (prev.some((x) => x.id === notif2hId) ? prev : [notif, ...prev]));
+            setDocument('notifications', notif2hId, notif);
+          }
+        }
+      });
+    };
+
+    runReminderScanner();
+    const intervalId = window.setInterval(runReminderScanner, 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [clientPackages, bookings, clients, trainers, users, currentUser, notifications]);
 
   const logAudit = (action: string, details: string) => {
     const newLog: AuditLogItem = {
@@ -1224,15 +1354,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setClients((prev) =>
       prev.map((c) => {
         if (c.id === id) {
+          const safeUpdates = c.healthDeclaration?.signed
+            ? { ...updates, healthDeclaration: c.healthDeclaration }
+            : updates;
           const updated = {
             ...c,
-            ...updates,
+            ...safeUpdates,
             ...(cleanEmail ? { email: cleanEmail } : {}),
             ...(cleanPassword ? { password: cleanPassword } : {}),
             ...(cleanName ? { fullName: cleanName } : {}),
           };
-          if (updates.dateOfBirth) {
-            updated.age = calculateAge(updates.dateOfBirth);
+          if (safeUpdates.dateOfBirth) {
+            updated.age = calculateAge(safeUpdates.dateOfBirth);
           }
           setDocument('clients', id, updated);
           return updated;
@@ -1332,20 +1465,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     logAudit('DELETE_HEALTH_NOTE', `Removed health issue ${issueId} for client ${clientId}`);
   };
 
-  const saveClientHealthDeclaration = (clientId: string, declaration: HealthDeclaration) => {
+  const saveClientHealthDeclaration = (
+    clientId: string,
+    declaration: HealthDeclaration
+  ): { success: boolean; message: string } => {
+    const existingClient = clients.find((c) => c.id === clientId);
+    if (existingClient?.healthDeclaration?.signed) {
+      return {
+        success: false,
+        message: 'This digital declaration has already been submitted and signed. It is view-only and cannot be modified.',
+      };
+    }
+
+    const lockedDeclaration: HealthDeclaration = {
+      ...declaration,
+      signed: true,
+    };
+
     setClients((prev) =>
       prev.map((c) => {
         if (c.id === clientId) {
-          updateDocument('clients', clientId, { healthDeclaration: declaration });
+          if (c.healthDeclaration?.signed) {
+            return c;
+          }
+          updateDocument('clients', clientId, { healthDeclaration: lockedDeclaration });
           return {
             ...c,
-            healthDeclaration: declaration,
+            healthDeclaration: lockedDeclaration,
           };
         }
         return c;
       })
     );
-    logAudit('HEALTH_DECLARATION_SIGNED', `Health & Illness Declaration recorded for client ${clientId}`);
+    logAudit('HEALTH_DECLARATION_SIGNED', `Health & Illness Declaration recorded and locked for client ${clientId}`);
+    return {
+      success: true,
+      message: 'Declaration & Digital Signature successfully recorded!',
+    };
   };
 
   const addTrainer = (trainerData: Omit<Trainer, 'id' | 'status' | 'createdAt'>): Trainer => {
@@ -2888,6 +3044,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const booking = bookings.find((b) => b.id === bookingId);
     if (!booking) return { success: false, message: 'Booking not found.' };
 
+    if (booking.status !== 'Scheduled' && booking.status !== 'Rescheduled') {
+      return { success: false, message: `Cannot reschedule a session with status "${booking.status}".` };
+    }
+
+    if (!newDate || !newStartTime || !newEndTime) {
+      return { success: false, message: 'Please select a valid date, start time, and end time.' };
+    }
+
+    if (newStartTime >= newEndTime) {
+      return { success: false, message: 'End time must be after start time.' };
+    }
+
     const pkg = clientPackages.find((p) => p.id === booking.packageId);
     if (!pkg) return { success: false, message: 'Associated package not found.' };
 
@@ -2911,28 +3079,98 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
+    // Check trainer time conflict on the new date/time (excluding this booking)
+    const trainerConflict = bookings.find(
+      (b) =>
+        b.id !== bookingId &&
+        b.trainerId === booking.trainerId &&
+        b.sessionDate === newDate &&
+        (b.status === 'Scheduled' || b.status === 'Rescheduled') &&
+        newStartTime < b.endTime &&
+        newEndTime > b.startTime
+    );
+
+    if (trainerConflict) {
+      return { success: false, message: 'Trainer is already booked during this time slot.' };
+    }
+
+    const [sh, sm] = newStartTime.split(':').map((n) => parseInt(n, 10) || 0);
+    const [eh, em] = newEndTime.split(':').map((n) => parseInt(n, 10) || 0);
+    const computedDuration = Math.max(15, eh * 60 + em - (sh * 60 + sm));
+
+    const updatedFields = {
+      sessionDate: newDate,
+      startTime: newStartTime,
+      endTime: newEndTime,
+      durationMinutes: computedDuration,
+      status: 'Rescheduled' as const,
+      clientConfirmedAttendance: false,
+      reminder24hSentAt: '',
+    };
+
     setBookings((prev) =>
       prev.map((b) =>
         b.id === bookingId
           ? {
               ...b,
-              sessionDate: newDate,
-              startTime: newStartTime,
-              endTime: newEndTime,
-              status: 'Rescheduled',
+              ...updatedFields,
             }
           : b
       )
     );
+    updateDocument('bookings', bookingId, updatedFields);
+
+    logAudit('RESCHEDULE_SESSION', `Rescheduled session ${bookingId} to ${newDate} ${newStartTime} - ${newEndTime}`);
+    return { success: true, message: 'Session rescheduled successfully!' };
+  };
+
+  const confirmBookingAttendance = (bookingId: string) => {
+    const booking = bookings.find((b) => b.id === bookingId);
+    if (!booking) return { success: false, message: 'Session booking not found.' };
+    if (booking.status !== 'Scheduled' && booking.status !== 'Rescheduled') {
+      return { success: false, message: 'Only scheduled or rescheduled sessions can be confirmed.' };
+    }
+
+    const confirmedAt = new Date().toISOString();
+    setBookings((prev) =>
+      prev.map((b) =>
+        b.id === bookingId
+          ? { ...b, clientConfirmedAttendance: true, clientConfirmedAt: confirmedAt }
+          : b
+      )
+    );
     updateDocument('bookings', bookingId, {
-      sessionDate: newDate,
-      startTime: newStartTime,
-      endTime: newEndTime,
-      status: 'Rescheduled',
+      clientConfirmedAttendance: true,
+      clientConfirmedAt: confirmedAt,
     });
 
-    logAudit('RESCHEDULE_SESSION', `Rescheduled session ${bookingId} to ${newDate} ${newStartTime}`);
-    return { success: true, message: 'Session rescheduled successfully!' };
+    const remNotifId = `NOTIF-REM24H-${bookingId}`;
+    setNotifications((prev) => prev.map((n) => (n.id === remNotifId ? { ...n, read: true } : n)));
+    if (notifications.some((n) => n.id === remNotifId)) {
+      updateDocument('notifications', remNotifId, { read: true });
+    }
+
+    const clientObj = clients.find((c) => c.id === booking.clientId);
+    const trainerUser = users.find((u) => u.associatedId === booking.trainerId);
+    if (trainerUser) {
+      const trNotifId = `NOTIF-CONF-${bookingId}`;
+      const trNotif: NotificationItem = {
+        id: trNotifId,
+        userId: trainerUser.id,
+        title: 'Client Confirmed Session Attendance',
+        message: `${clientObj?.fullName || 'Client'} confirmed attendance for ${formatReadableDate(booking.sessionDate)} at ${booking.startTime} GST.`,
+        type: 'booking',
+        category: 'general',
+        bookingId,
+        read: false,
+        timestamp: confirmedAt,
+      };
+      setNotifications((prev) => (prev.some((x) => x.id === trNotifId) ? prev : [trNotif, ...prev]));
+      setDocument('notifications', trNotifId, trNotif);
+    }
+
+    logAudit('SESSION_ATTENDANCE_CONFIRMED', `Client confirmed attendance for session ${bookingId}`);
+    return { success: true, message: 'Attendance confirmed for your upcoming training session.' };
   };
 
   // Manual Expiry & Validity Extension
@@ -3116,8 +3354,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const markAllNotificationsRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-    notifications.forEach((n) => updateDocument('notifications', n.id, { read: true }));
+    const targetIds = new Set(userNotifications.map((n) => n.id));
+    setNotifications((prev) => prev.map((n) => (targetIds.has(n.id) ? { ...n, read: true } : n)));
+    userNotifications.forEach((n) => {
+      if (!n.read) updateDocument('notifications', n.id, { read: true });
+    });
   };
 
   const deleteNotification = (id: string) => {
@@ -3126,8 +3367,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const clearAllNotifications = () => {
-    setNotifications([]);
-    notifications.forEach((n) => deleteDocument('notifications', n.id));
+    const targetIds = new Set(userNotifications.map((n) => n.id));
+    setNotifications((prev) => prev.filter((n) => !targetIds.has(n.id)));
+    userNotifications.forEach((n) => deleteDocument('notifications', n.id));
   };
 
   // Slider Management (Admin Only)
@@ -3679,6 +3921,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         subscriptions,
         savedCards,
         notifications,
+        userNotifications,
         auditLogs,
         settings,
         addSavedCard,
@@ -3712,6 +3955,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         cancelSessionByAdmin,
         markNoShow,
         rescheduleBooking,
+        confirmBookingAttendance,
         extendPackageExpiry,
         adjustSessionCredits,
         cancelSubscription,
@@ -3722,6 +3966,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         markAllNotificationsRead,
         deleteNotification,
         clearAllNotifications,
+        requestPushPermission,
         slides,
         updateSlide,
         addSlide,

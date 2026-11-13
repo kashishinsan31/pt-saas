@@ -927,11 +927,19 @@ export const ClientsModule: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => setIsHealthModalOpen(true)}
-                          className="px-3.5 py-1.5 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-xs flex items-center gap-1.5 transition-colors"
+                          className={`px-3.5 py-1.5 text-xs font-bold text-white rounded-xl shadow-xs flex items-center gap-1.5 transition-colors ${
+                            currentSelectedClient.healthDeclaration?.signed
+                              ? 'bg-slate-800 hover:bg-slate-900'
+                              : 'bg-blue-600 hover:bg-blue-700'
+                          }`}
                         >
-                          <PenTool className="w-3 h-3" />
+                          {currentSelectedClient.healthDeclaration?.signed ? (
+                            <Eye className="w-3.5 h-3.5" />
+                          ) : (
+                            <PenTool className="w-3 h-3" />
+                          )}
                           <span>
-                            {currentSelectedClient.healthDeclaration?.signed ? 'View / Re-Sign' : 'Open & Sign'}
+                            {currentSelectedClient.healthDeclaration?.signed ? 'View Signed Form' : 'Open & Sign'}
                           </span>
                         </button>
                       </div>
@@ -1780,6 +1788,7 @@ export const ClientsModule: React.FC = () => {
           client={currentSelectedClient}
           isOpen={isHealthModalOpen}
           onClose={() => setIsHealthModalOpen(false)}
+          canEdit={!currentSelectedClient.healthDeclaration?.signed}
         />
       )}
 

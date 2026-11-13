@@ -179,6 +179,8 @@ export const CalendarModule: React.FC = () => {
     switch (status) {
       case 'Completed':
         return 'bg-emerald-600 text-white border-emerald-700';
+      case 'Rescheduled':
+        return 'bg-indigo-600 text-white border-indigo-700';
       case 'Scheduled':
         return 'bg-blue-600 text-white border-blue-700';
       case 'Late Cancellation':
@@ -298,6 +300,10 @@ export const CalendarModule: React.FC = () => {
           <span className="flex items-center space-x-1">
             <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
             <span className="text-slate-600 font-medium">Scheduled</span>
+          </span>
+          <span className="flex items-center space-x-1">
+            <span className="w-2.5 h-2.5 rounded-full bg-indigo-600"></span>
+            <span className="text-slate-600 font-medium">Rescheduled</span>
           </span>
           <span className="flex items-center space-x-1">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-600"></span>
@@ -548,9 +554,21 @@ export const CalendarModule: React.FC = () => {
                   <span className="text-slate-500 font-bold">Location:</span>
                   <span className="text-slate-800">{selectedSession.location}</span>
                 </div>
-                <div className="flex justify-between pt-2 border-t border-slate-200">
+                <div className="flex justify-between items-center pt-2 border-t border-slate-200">
                   <span className="text-slate-500 font-bold">Status:</span>
-                  <span className="font-bold text-blue-700">{selectedSession.status}</span>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                      selectedSession.status === 'Rescheduled'
+                        ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                        : selectedSession.status === 'Completed'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : selectedSession.status === 'Scheduled'
+                        ? 'bg-blue-100 text-blue-800'
+                        : 'bg-slate-200 text-slate-800'
+                    }`}
+                  >
+                    {selectedSession.status}
+                  </span>
                 </div>
               </div>
 
@@ -577,9 +595,10 @@ export const CalendarModule: React.FC = () => {
                 </div>
               )}
 
-              {selectedSession.status === 'Scheduled' && (
+              {(selectedSession.status === 'Scheduled' || selectedSession.status === 'Rescheduled') && (
                 <div className="flex space-x-2 pt-2">
                   <button
+                    type="button"
                     onClick={() => {
                       setRescheduleDate(selectedSession.sessionDate);
                       setRescheduleStartTime(selectedSession.startTime);
@@ -587,13 +606,14 @@ export const CalendarModule: React.FC = () => {
                       setRescheduleMsg('');
                       setIsRescheduleOpen(true);
                     }}
-                    className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold"
+                    className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold cursor-pointer"
                   >
                     Reschedule Session
                   </button>
                   <button
+                    type="button"
                     onClick={() => handleOpenCompleteModalCalendar(selectedSession)}
-                    className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold"
+                    className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold cursor-pointer"
                   >
                     Mark Complete
                   </button>
@@ -621,7 +641,7 @@ export const CalendarModule: React.FC = () => {
 
       {/* Reschedule Modal */}
       {isRescheduleOpen && selectedSession && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[60] overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-200">
             <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
               <h3 className="font-bold text-slate-900 text-base">Reschedule Session</h3>

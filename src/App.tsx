@@ -5,6 +5,7 @@ import { Sidebar, ActiveTab } from './components/common/Sidebar';
 import { MobileBottomNav } from './components/common/MobileBottomNav';
 import { LoginPage } from './components/auth/LoginPage';
 import { NotificationsModal } from './components/common/NotificationsModal';
+import { BellRing, CheckCircle2, X } from 'lucide-react';
 
 // Module Imports
 import { AdminDashboard } from './components/admin/AdminDashboard';
@@ -26,16 +27,25 @@ import { TrainerDashboard } from './components/trainer/TrainerDashboard';
 import { ClientDashboard } from './components/client/ClientDashboard';
 
 function MainAppContent() {
-  const { currentUser } = useApp();
+  const { currentUser, userNotifications, confirmBookingAttendance, markNotificationRead } = useApp();
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isNotifModalOpen, setIsNotifModalOpen] = useState(false);
+  const [dismissedToastIds, setDismissedToastIds] = useState<string[]>([]);
 
   if (!currentUser) {
     return <LoginPage />;
   }
 
   const role = currentUser.role;
+
+  // Floating in-app 24h reminder alert toast for logged-in clients
+  const activeReminderToast =
+    role === 'client'
+      ? userNotifications.find(
+          (n) => !n.read && n.category === '24h_reminder' && !dismissedToastIds.includes(n.id)
+        )
+      : undefined;
 
   const renderTabContent = () => {
     // Shared tabs for all roles
@@ -121,6 +131,64 @@ function MainAppContent() {
         onClose={() => setIsNotifModalOpen(false)}
         onNavigate={(tab) => setActiveTab(tab as ActiveTab)}
       />
+
+      {/* Non-blocking Floating In-App 24-Hour Session Reminder Alert */}
+      {activeReminderToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-20 lg:bottom-6 right-4 sm:right-6 z-40 max-w-sm w-[calc(100vw-2rem)] bg-slate-900 text-white rounded-2xl shadow-2xl border border-slate-700 p-4 space-y-3"
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center shrink-0">
+                <BellRing className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-extrabold text-white">{activeReminderToast.title}</div>
+                <p className="text-[11px] text-slate-300 mt-0.5 leading-relaxed">
+                  {activeReminderToast.message}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDismissedToastIds((prev) => [...prev, activeReminderToast.id])}
+              className="p-1 text-slate-400 hover:text-white rounded-lg transition-colors shrink-0 cursor-pointer"
+              aria-label="Dismiss alert"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                markNotificationRead(activeReminderToast.id);
+                setActiveTab('sessions');
+                setDismissedToastIds((prev) => [...prev, activeReminderToast.id]);
+              }}
+              className="px-3 py-1.5 text-[11px] font-bold text-slate-200 hover:text-white hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+            >
+              View / Reschedule
+            </button>
+            {activeReminderToast.bookingId && (
+              <button
+                type="button"
+                onClick={() => {
+                  confirmBookingAttendance(activeReminderToast.bookingId!);
+                  setDismissedToastIds((prev) => [...prev, activeReminderToast.id]);
+                }}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Confirm Attendance</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

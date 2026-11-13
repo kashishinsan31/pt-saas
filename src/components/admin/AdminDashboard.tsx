@@ -45,7 +45,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigateTab })
   const activePackages = clientPackages.filter((p) => p.status === 'Active').length;
 
   const todaySessions = bookings.filter((b) => b.sessionDate === todayStr);
-  const upcomingSessions = bookings.filter((b) => b.sessionDate >= todayStr && b.status === 'Scheduled');
+  const upcomingSessions = bookings.filter(
+    (b) => b.sessionDate >= todayStr && (b.status === 'Scheduled' || b.status === 'Rescheduled')
+  );
   const completedSessions = bookings.filter((b) => b.status === 'Completed').length;
   const cancelledSessions = bookings.filter((b) => b.status.includes('Cancelled') || b.status === 'Late Cancellation').length;
 

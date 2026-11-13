@@ -51,6 +51,7 @@ import { AddHealthIssueModal } from '../common/AddHealthIssueModal';
 import { ProgressAnalyticsSection } from './ProgressAnalyticsSection';
 import { LogBodyMetricModal } from './LogBodyMetricModal';
 import { ClientWorkoutAnalyticsCard } from './ClientWorkoutAnalyticsCard';
+import { SessionReminderAlertBar } from './SessionReminderAlertBar';
 
 interface ClientDashboardProps {
   initialSection?: 'dashboard' | 'sessions' | 'payments' | 'subscriptions' | 'health' | 'upcoming';
@@ -212,6 +213,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
     cancelSessionByClient,
     cancelSubscription,
     createBooking,
+    rescheduleBooking,
     payAndActivatePackage,
     submitSessionReview,
     syncWithStripe,
@@ -280,8 +282,12 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
   const daysRemaining = activePackage ? getDaysRemaining(activePackage.expiryDate) : 0;
 
   const clientBookings = bookings.filter((b) => b.clientId === activeClientId);
-  const upcomingBookings = clientBookings.filter((b) => b.status === 'Scheduled');
-  const pastBookings = clientBookings.filter((b) => b.status !== 'Scheduled');
+  const upcomingBookings = clientBookings.filter(
+    (b) => b.status === 'Scheduled' || b.status === 'Rescheduled'
+  );
+  const pastBookings = clientBookings.filter(
+    (b) => b.status !== 'Scheduled' && b.status !== 'Rescheduled'
+  );
 
   const clientPayments = [...payments]
     .filter((p) => p.clientId === activeClientId)
@@ -751,11 +757,18 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
   // Auto-deduction test feedback
   const [autoDeductionMsg, setAutoDeductionMsg] = useState('');
 
-  // Booking & Cancellation Modals
+  // Booking, Reschedule & Cancellation Modals
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [selectedBookingForCancel, setSelectedBookingForCancel] = useState<any>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [cancellationResult, setCancellationResult] = useState<any>(null);
+
+  const [isRescheduleModalOpen, setIsRescheduleModalOpen] = useState(false);
+  const [selectedBookingForReschedule, setSelectedBookingForReschedule] = useState<any>(null);
+  const [rescheduleDate, setRescheduleDate] = useState('');
+  const [rescheduleStartTime, setRescheduleStartTime] = useState('');
+  const [rescheduleEndTime, setRescheduleEndTime] = useState('');
+  const [rescheduleMsg, setRescheduleMsg] = useState('');
 
   const [isBuyModalOpen, setIsBuyModalOpen] = useState(false);
   const [selectedPackageDef, setSelectedPackageDef] = useState(packageDefinitions[2] || packageDefinitions[0]);
@@ -940,6 +953,33 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
     setTimeout(() => {
       setIsCancelModalOpen(false);
     }, 2000);
+  };
+
+  const handleOpenRescheduleModal = (b: any) => {
+    setSelectedBookingForReschedule(b);
+    setRescheduleDate(b.sessionDate);
+    setRescheduleStartTime(b.startTime);
+    setRescheduleEndTime(b.endTime);
+    setRescheduleMsg('');
+    setIsRescheduleModalOpen(true);
+  };
+
+  const handleConfirmRescheduleClient = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedBookingForReschedule) return;
+    const res = rescheduleBooking(
+      selectedBookingForReschedule.id,
+      rescheduleDate,
+      rescheduleStartTime,
+      rescheduleEndTime
+    );
+    if (res.success) {
+      setIsRescheduleModalOpen(false);
+      setSelectedBookingForReschedule(null);
+      setRescheduleMsg('');
+    } else {
+      setRescheduleMsg(res.message);
+    }
   };
 
   const handleCreateBooking = (e: React.FormEvent) => {
@@ -1147,6 +1187,12 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
           </button>
         </div>
       )}
+
+      {/* 24-Hour Session Reminder & Browser Push Alert Bar */}
+      <SessionReminderAlertBar
+        bookings={clientBookings}
+        onManageSession={() => setActiveTab('sessions')}
+      />
 
       {/* OVERVIEW TAB */}
       {activeTab === 'overview' && (
@@ -1507,7 +1553,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
               onClick={() => setActiveTab('health')}
               className="text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 shrink-0"
             >
-              <span>View & Update</span>
+              <span>{client.healthDeclaration?.signed ? 'View Form' : 'Complete Form'}</span>
               <span>&rarr;</span>
             </button>
           </div>
@@ -1679,10 +1725,13 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
 
       {/* VISUAL PROGRESS & BODY ANALYTICS TAB */}
       {activeTab === 'progress' && (
-        <ProgressAnalyticsSection
-          client={client}
-          onOpenLogModal={() => setIsLogMetricModalOpen(true)}
-        />
+        <div className="space-y-6">
+          <ClientWorkoutAnalyticsCard bookings={clientBookings} />
+          <ProgressAnalyticsSection
+            client={client}
+            onOpenLogModal={() => setIsLogMetricModalOpen(true)}
+          />
+        </div>
       )}
 
       {/* SESSIONS TAB */}
@@ -1711,20 +1760,42 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
 
                 return (
                   <div key={b.id} className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2">
-                    <div className="flex justify-between items-start">
+                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2">
                       <div>
-                        <div className="font-extrabold text-slate-900 text-sm">
-                          {formatReadableDate(b.sessionDate)} at {b.startTime}
+                        <div className="font-extrabold text-slate-900 text-sm flex flex-wrap items-center gap-2">
+                          <span>{formatReadableDate(b.sessionDate)} at {b.startTime} - {b.endTime}</span>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              b.status === 'Rescheduled'
+                                ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                                : 'bg-blue-100 text-blue-800 border border-blue-200'
+                            }`}
+                          >
+                            {b.status}
+                          </span>
+                          {b.clientConfirmedAttendance && (
+                            <span className="text-[11px] font-bold text-emerald-700">✓ Attendance Confirmed</span>
+                          )}
                         </div>
                         <div className="text-slate-500 text-[11px] mt-0.5">{b.location}</div>
                       </div>
 
-                      <button
-                        onClick={() => handleOpenCancelModal(b)}
-                        className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 font-bold border border-red-200 rounded-lg text-xs"
-                      >
-                        Cancel Session
-                      </button>
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenRescheduleModal(b)}
+                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs cursor-pointer"
+                        >
+                          Reschedule
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenCancelModal(b)}
+                          className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 font-bold border border-red-200 rounded-lg text-xs cursor-pointer"
+                        >
+                          Cancel Session
+                        </button>
+                      </div>
                     </div>
 
                     <div className="flex items-center space-x-1.5 text-[11px] text-slate-600 font-medium pt-1 border-t border-slate-200/60">
@@ -2185,10 +2256,18 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ initialSection
                 <button
                   type="button"
                   onClick={() => setIsHealthModalOpen(true)}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-xl shadow-xs flex items-center gap-1.5 transition-colors"
+                  className={`px-4 py-2 text-white font-extrabold rounded-xl shadow-xs flex items-center gap-1.5 transition-colors ${
+                    client.healthDeclaration?.signed
+                      ? 'bg-slate-800 hover:bg-slate-900'
+                      : 'bg-blue-600 hover:bg-blue-700'
+                  }`}
                 >
-                  <PenTool className="w-3.5 h-3.5" />
-                  <span>{client.healthDeclaration?.signed ? 'View / Re-Sign' : 'Open & Sign PAR-Q'}</span>
+                  {client.healthDeclaration?.signed ? (
+                    <FileText className="w-3.5 h-3.5" />
+                  ) : (
+                    <PenTool className="w-3.5 h-3.5" />
+                  )}
+                  <span>{client.healthDeclaration?.signed ? 'View Signed Form' : 'Open & Sign PAR-Q'}</span>
                 </button>
               </div>
             </div>
@@ -2816,6 +2895,95 @@ Personal training session packages are personal and non-transferable. Package re
         </div>
       )}
 
+      {/* Client Reschedule Date & Timing Modal */}
+      {isRescheduleModalOpen && selectedBookingForReschedule && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-200">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Reschedule Session Date &amp; Timing</h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Only the date and timing will be updated and marked as Rescheduled.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsRescheduleModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {rescheduleMsg && (
+              <div className="mb-4 bg-red-50 border border-red-200 text-red-700 text-xs p-3 rounded-lg flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                <span>{rescheduleMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleConfirmRescheduleClient} className="space-y-4 text-xs">
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Current Schedule</span>
+                <div className="font-bold text-slate-800">
+                  {formatReadableDate(selectedBookingForReschedule.sessionDate)} • {selectedBookingForReschedule.startTime} - {selectedBookingForReschedule.endTime}
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1">New Session Date</label>
+                <input
+                  type="date"
+                  required
+                  value={rescheduleDate}
+                  onChange={(e) => setRescheduleDate(e.target.value)}
+                  className="w-full p-2.5 border border-slate-300 rounded-lg text-xs"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Start Time</label>
+                  <input
+                    type="time"
+                    required
+                    value={rescheduleStartTime}
+                    onChange={(e) => setRescheduleStartTime(e.target.value)}
+                    className="w-full p-2.5 border border-slate-300 rounded-lg text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">End Time</label>
+                  <input
+                    type="time"
+                    required
+                    value={rescheduleEndTime}
+                    onChange={(e) => setRescheduleEndTime(e.target.value)}
+                    className="w-full p-2.5 border border-slate-300 rounded-lg text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setIsRescheduleModalOpen(false)}
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold cursor-pointer"
+                >
+                  Save Rescheduled Time
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Request Session Booking Modal */}
       {isBookModalOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
@@ -3247,6 +3415,7 @@ Personal training session packages are personal and non-transferable. Package re
           client={client}
           isOpen={isHealthModalOpen}
           onClose={() => setIsHealthModalOpen(false)}
+          canEdit={!client.healthDeclaration?.signed}
         />
       )}
 

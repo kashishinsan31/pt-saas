@@ -203,6 +203,9 @@ export interface SessionBooking {
   sessionRating?: number;
   clientReview?: string;
   reviewedAt?: string;
+  reminder24hSentAt?: string;
+  clientConfirmedAttendance?: boolean;
+  clientConfirmedAt?: string;
   createdAt: string;
 }
 
@@ -299,6 +302,8 @@ export interface NotificationItem {
   title: string;
   message: string;
   type: 'booking' | 'cancellation' | 'expiry' | 'payment' | 'subscription' | 'system';
+  category?: '24h_reminder' | '2h_reminder' | 'general';
+  bookingId?: string;
   read: boolean;
   timestamp: string;
   actionUrl?: string;

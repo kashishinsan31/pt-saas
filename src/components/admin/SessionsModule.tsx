@@ -179,12 +179,13 @@ export const SessionsModule: React.FC = () => {
 
       {/* Filter Toolbar */}
       <div className="flex items-center space-x-2 overflow-x-auto pb-1">
-        {['ALL', 'Scheduled', 'Completed', 'Cancelled by Client', 'Cancelled by Trainer', 'Late Cancellation', 'No Show'].map(
+        {['ALL', 'Scheduled', 'Rescheduled', 'Completed', 'Cancelled by Client', 'Cancelled by Trainer', 'Late Cancellation', 'No Show'].map(
           (st) => (
             <button
+              type="button"
               key={st}
               onClick={() => setStatusFilter(st)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
                 statusFilter === st
                   ? 'bg-slate-900 text-white shadow-xs'
                   : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
@@ -247,6 +248,8 @@ export const SessionsModule: React.FC = () => {
                           className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
                             b.status === 'Completed'
                               ? 'bg-emerald-100 text-emerald-800'
+                              : b.status === 'Rescheduled'
+                              ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
                               : b.status === 'Scheduled'
                               ? 'bg-blue-100 text-blue-800'
                               : b.status === 'Late Cancellation' || b.status === 'No Show'
@@ -275,7 +278,7 @@ export const SessionsModule: React.FC = () => {
                       </td>
 
                       <td className="py-3.5 px-4 text-right">
-                        {b.status === 'Scheduled' && (
+                        {(b.status === 'Scheduled' || b.status === 'Rescheduled') && (
                           <div className="flex items-center justify-end space-x-1">
                             {client?.whatsappNumber && (
                               <a
@@ -289,7 +292,8 @@ export const SessionsModule: React.FC = () => {
                                 <span>WhatsApp</span>
                               </a>
                             )}
-                             <button
+                            <button
+                              type="button"
                               onClick={() => {
                                 setSelectedBooking(b);
                                 setRescheduleDate(b.sessionDate);
@@ -298,34 +302,37 @@ export const SessionsModule: React.FC = () => {
                                 setRescheduleMsg('');
                                 setIsRescheduleModalOpen(true);
                               }}
-                              className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold text-[10px] shrink-0"
+                              className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold text-[10px] shrink-0 cursor-pointer"
                               title="Reschedule session date and timing"
                             >
                               Reschedule Time
                             </button>
                             <button
+                              type="button"
                               onClick={() => {
                                 setSelectedBooking(b);
                                 setIsCompleteModalOpen(true);
                               }}
-                              className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[10px]"
+                              className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[10px] cursor-pointer"
                             >
                               Complete
                             </button>
 
                             <button
+                              type="button"
                               onClick={() => {
                                 setSelectedBooking(b);
                                 setCancelReason('');
                                 setIsCancelModalOpen(true);
                               }}
-                              className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white rounded font-bold text-[10px]"
+                              className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white rounded font-bold text-[10px] cursor-pointer"
                             >
                               Cancel
                             </button>
                             <button
+                              type="button"
                               onClick={() => markNoShow(b.id)}
-                              className="px-2 py-1 bg-slate-800 hover:bg-slate-900 text-white rounded font-bold text-[10px]"
+                              className="px-2 py-1 bg-slate-800 hover:bg-slate-900 text-white rounded font-bold text-[10px] cursor-pointer"
                             >
                               No Show
                             </button>

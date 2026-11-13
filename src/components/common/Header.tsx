@@ -43,7 +43,7 @@ export const Header: React.FC<HeaderProps> = ({
     currentUser,
     logout,
     loginAsRole,
-    notifications,
+    userNotifications,
     trainers,
     clients,
     refreshDataFromServer,
@@ -64,7 +64,7 @@ export const Header: React.FC<HeaderProps> = ({
     }, 3500);
   };
 
-  const unreadNotifications = notifications.filter((n) => !n.read);
+  const unreadNotifications = userNotifications.filter((n) => !n.read);
   const activeTitle = TAB_TITLES[activeTab] || 'Dashboard';
 
   const getRoleDisplayName = (role?: string) => {

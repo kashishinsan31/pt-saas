@@ -45,7 +45,9 @@ export const OperationsAutomationModule: React.FC = () => {
   });
 
   const scheduledTargetBookings = accessibleBookings.filter(
-    (b) => (selectedDay === 'week' ? true : b.sessionDate === targetDateStr) && b.status === 'Scheduled'
+    (b) =>
+      (selectedDay === 'week' ? true : b.sessionDate === targetDateStr) &&
+      (b.status === 'Scheduled' || b.status === 'Rescheduled')
   );
 
   // Filter expiring packages (<= 3 days left)

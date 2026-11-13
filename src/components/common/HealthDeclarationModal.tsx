@@ -2,19 +2,16 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Client, HealthDeclaration } from '../../types';
 import { SignatureCanvas } from './SignatureCanvas';
-import { formatReadableDate } from '../../utils/dubaiTime';
 import {
   FileText,
   ShieldCheck,
   X,
   CheckCircle,
   AlertCircle,
-  Calendar,
   PenTool,
-  RotateCcw,
   Check,
-  User,
   HeartPulse,
+  Lock,
 } from 'lucide-react';
 
 interface HealthDeclarationModalProps {
@@ -28,11 +25,11 @@ export const HealthDeclarationModal: React.FC<HealthDeclarationModalProps> = ({
   client,
   isOpen,
   onClose,
-  canEdit = true,
 }) => {
   const { settings, saveClientHealthDeclaration, currentUser } = useApp();
 
   const existingDecl = client.healthDeclaration;
+  const isSigned = Boolean(existingDecl?.signed);
 
   const [hasHeartCondition, setHasHeartCondition] = useState(existingDecl?.hasHeartCondition ?? false);
   const [hasChestPain, setHasChestPain] = useState(existingDecl?.hasChestPain ?? false);
@@ -47,21 +44,25 @@ export const HealthDeclarationModal: React.FC<HealthDeclarationModalProps> = ({
   const [additionalMedicalDetails, setAdditionalMedicalDetails] = useState(
     existingDecl?.additionalMedicalDetails || ''
   );
-  const [doctorClearanceProvided, setDoctorClearanceProvided] = useState(
-    existingDecl?.doctorClearanceProvided ?? true
-  );
+  const [doctorClearanceProvided] = useState(existingDecl?.doctorClearanceProvided ?? true);
   const [agreedToDeclaration, setAgreedToDeclaration] = useState(existingDecl?.agreedToDeclaration ?? false);
   const [signatureDataUrl, setSignatureDataUrl] = useState(existingDecl?.signatureDataUrl || '');
   const [witnessName, setWitnessName] = useState(existingDecl?.witnessOrTrainerName || currentUser?.name || '');
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const [isEditingExisting, setIsEditingExisting] = useState(!existingDecl?.signed);
 
   if (!isOpen) return null;
 
   const handleSaveSignature = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+
+    if (isSigned) {
+      setErrorMessage(
+        'This digital form has already been completed and signed. It is permanently locked for viewing only and cannot be changed.'
+      );
+      return;
+    }
 
     if (!agreedToDeclaration) {
       setErrorMessage('Please check the confirmation box acknowledging you agree to the health declaration.');
@@ -94,22 +95,62 @@ export const HealthDeclarationModal: React.FC<HealthDeclarationModalProps> = ({
       witnessOrTrainerName: witnessName,
     };
 
-    saveClientHealthDeclaration(client.id, newDeclaration);
-    setSaveSuccess(true);
-    setIsEditingExisting(false);
+    const result = saveClientHealthDeclaration(client.id, newDeclaration);
+    if (!result.success) {
+      setErrorMessage(result.message);
+      return;
+    }
 
+    setSaveSuccess(true);
     setTimeout(() => {
       setSaveSuccess(false);
       onClose();
     }, 1500);
   };
 
-  const isSigned = client.healthDeclaration?.signed;
+  const checklistResponses = [
+    {
+      label: 'Doctor ever diagnosed a heart condition or murmur?',
+      value: Boolean(existingDecl?.hasHeartCondition),
+    },
+    {
+      label: 'Pain or tightness in chest during physical activity?',
+      value: Boolean(existingDecl?.hasChestPain),
+    },
+    {
+      label: 'Frequent loss of balance due to dizziness or loss of consciousness?',
+      value: Boolean(existingDecl?.hasDizzinessOrFainting),
+    },
+    {
+      label: 'Bone, joint, or spinal injury that could be worsened by exercise?',
+      value: Boolean(existingDecl?.hasBoneJointIssue),
+    },
+    {
+      label: 'Currently taking medication for blood pressure or heart condition?',
+      value: Boolean(existingDecl?.hasBloodPressureIssue),
+    },
+    {
+      label: 'Asthma, respiratory issues, or exercise-induced shortness of breath?',
+      value: Boolean(existingDecl?.hasAsthmaOrBreathing),
+    },
+    {
+      label: 'Chronic illnesses (e.g., diabetes, epilepsy, autoimmune condition)?',
+      value: Boolean(existingDecl?.hasChronicIllness),
+    },
+    ...(client.gender === 'Female' || existingDecl?.isPregnantOrRecentPostpartum
+      ? [
+          {
+            label: 'Currently pregnant or given birth within the past 6 months?',
+            value: Boolean(existingDecl?.isPregnantOrRecentPostpartum),
+          },
+        ]
+      : []),
+  ];
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden border border-slate-200">
-        {/* Header - Native App Style */}
+        {/* Header */}
         <div className="bg-slate-900 text-white p-5 flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 rounded-xl bg-blue-600/30 border border-blue-400/30 flex items-center justify-center text-blue-400">
@@ -123,6 +164,7 @@ export const HealthDeclarationModal: React.FC<HealthDeclarationModalProps> = ({
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
           >
@@ -131,11 +173,11 @@ export const HealthDeclarationModal: React.FC<HealthDeclarationModalProps> = ({
         </div>
 
         {/* Status Banner */}
-        <div className="px-6 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+        <div className="px-6 py-3 border-b border-slate-100 flex items-center justify-between gap-2 bg-slate-50">
           <div className="flex items-center space-x-2">
             {isSigned ? (
               <>
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
                 <span className="text-xs font-bold text-emerald-800">
                   Declaration Electronically Signed & Verified
                 </span>
@@ -150,14 +192,11 @@ export const HealthDeclarationModal: React.FC<HealthDeclarationModalProps> = ({
             )}
           </div>
 
-          {isSigned && !isEditingExisting && canEdit && (
-            <button
-              onClick={() => setIsEditingExisting(true)}
-              className="text-xs font-bold text-blue-600 hover:text-blue-700 hover:underline flex items-center gap-1"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Update / Re-Sign</span>
-            </button>
+          {isSigned && (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-200/80 text-slate-700 text-[11px] font-bold">
+              <Lock className="w-3 h-3 text-slate-600" />
+              <span>View Only • Locked</span>
+            </span>
           )}
         </div>
 
@@ -176,8 +215,8 @@ export const HealthDeclarationModal: React.FC<HealthDeclarationModalProps> = ({
             </div>
           )}
 
-          {/* If already signed and not currently re-editing, show signature receipt view */}
-          {isSigned && !isEditingExisting ? (
+          {/* Once signed, strictly render read-only view with no editing capability */}
+          {isSigned ? (
             <div className="space-y-5">
               <div className="p-4 bg-emerald-50/60 rounded-xl border border-emerald-200/80 space-y-3">
                 <div className="flex items-center justify-between border-b border-emerald-200/50 pb-2">
@@ -215,15 +254,45 @@ export const HealthDeclarationModal: React.FC<HealthDeclarationModalProps> = ({
                     <span className="font-bold text-slate-900">{existingDecl?.witnessOrTrainerName || 'Admin'}</span>
                   </div>
                 </div>
+              </div>
 
-                {existingDecl?.additionalMedicalDetails && (
-                  <div className="mt-2 pt-2 border-t border-emerald-200/50">
-                    <span className="text-slate-500 block text-[11px] font-semibold">
-                      Disclosed Medical & Health Notes:
-                    </span>
-                    <p className="font-medium text-slate-800 mt-0.5">{existingDecl.additionalMedicalDetails}</p>
-                  </div>
-                )}
+              {/* Submitted Medical Readiness Checklist (Strictly Read-Only) */}
+              <div className="bg-slate-50 rounded-xl border border-slate-200 overflow-hidden">
+                <div className="px-4 py-3 bg-slate-100/80 border-b border-slate-200 flex items-center justify-between">
+                  <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                    <HeartPulse className="w-3.5 h-3.5 text-red-500" />
+                    <span>Submitted Medical Readiness Responses</span>
+                  </h4>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase">Read-Only</span>
+                </div>
+
+                <div className="divide-y divide-slate-200/70">
+                  {checklistResponses.map((item, idx) => (
+                    <div key={idx} className="px-4 py-2.5 flex items-center justify-between gap-3">
+                      <span className="text-xs text-slate-700">{item.label}</span>
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-extrabold shrink-0 border ${
+                          item.value
+                            ? 'bg-amber-50 text-amber-800 border-amber-300'
+                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        }`}
+                      >
+                        {item.value ? 'YES' : 'NO'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="px-4 py-3 border-t border-slate-200 bg-white">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase block mb-1">
+                    Disclosed Medical Details, Surgeries, or Regular Medications
+                  </span>
+                  <p className="text-xs font-medium text-slate-800 whitespace-pre-wrap">
+                    {existingDecl?.additionalMedicalDetails?.trim()
+                      ? existingDecl.additionalMedicalDetails
+                      : 'None disclosed'}
+                  </p>
+                </div>
               </div>
 
               {/* Signature Image Preview */}
@@ -252,17 +321,36 @@ export const HealthDeclarationModal: React.FC<HealthDeclarationModalProps> = ({
 
               {/* View Terms */}
               <div className="border border-slate-200 rounded-xl overflow-hidden">
-                <div className="p-3 bg-slate-50 font-bold text-slate-800 border-b border-slate-200 flex items-center gap-1.5">
-                  <FileText className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Declaration Terms Accepted by Client</span>
+                <div className="p-3 bg-slate-50 font-bold text-slate-800 border-b border-slate-200 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Declaration Terms Accepted by Client</span>
+                  </span>
+                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                    ✓ Agreed
+                  </span>
                 </div>
                 <div className="p-4 bg-slate-50/50 max-h-40 overflow-y-auto whitespace-pre-line font-mono text-[11px] text-slate-600 leading-relaxed">
                   {settings.healthDeclarationText}
                 </div>
               </div>
+
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                <span className="text-[11px] text-slate-500 flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Signed digital forms are permanently locked and cannot be edited.</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2 text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white rounded-xl transition-colors"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           ) : (
-            /* Signing Form */
+            /* Signing Form (Only available when unsigned) */
             <form onSubmit={handleSaveSignature} className="space-y-6">
               {/* Official Declaration Text Box */}
               <div className="border border-slate-200 rounded-xl overflow-hidden">
@@ -283,7 +371,7 @@ export const HealthDeclarationModal: React.FC<HealthDeclarationModalProps> = ({
                   <span>Medical Readiness Assessment Checklist</span>
                 </h4>
                 <p className="text-[11px] text-slate-500">
-                  Please answer each item honestly to ensure your personal trainer designs a safe and effective training program.
+                  Please answer each item honestly to ensure your personal trainer designs a safe and effective training program. Once signed, responses are locked and view-only.
                 </p>
 
                 <div className="space-y-2.5 pt-2">
@@ -435,7 +523,7 @@ export const HealthDeclarationModal: React.FC<HealthDeclarationModalProps> = ({
                     className="mt-0.5 rounded text-blue-600 focus:ring-blue-500"
                   />
                   <span className="text-[11px] text-slate-700 font-medium">
-                    I confirm that the information provided above is complete and correct. I have read, understood, and agreed to the <strong>Physical Activity Readiness & Health Declaration</strong> terms and conditions.
+                    I confirm that the information provided above is complete and correct. I have read, understood, and agreed to the <strong>Physical Activity Readiness & Health Declaration</strong> terms and conditions, and understand this form becomes read-only once signed.
                   </span>
                 </label>
 
